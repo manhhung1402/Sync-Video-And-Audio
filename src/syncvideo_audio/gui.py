@@ -365,7 +365,7 @@ class SyncVideoAudioApp(ttk.Frame):
         self.transcript_entry, self.transcript_button = self._field(
             card,
             6,
-            "TRANSCRIPT  ·  MỘT DÒNG = MỘT MEDIA",
+            "TRANSCRIPT  ·  DÁN TEXT / CHỌN FILE  ·  TÁCH THEO . ! ? 。！？",
             self.transcript_var,
             self._choose_transcript,
         )
@@ -747,13 +747,33 @@ class SyncVideoAudioApp(ttk.Frame):
         alignment_mode = ALIGNMENT_OPTIONS[self.alignment_var.get()]
         transcript = self.transcript_var.get().strip()
         if alignment_mode is AlignmentMode.TRANSCRIPT and not transcript:
-            raise ValueError("Chế độ căn chuẩn cần chọn file transcript")
+            raise ValueError("Chế độ căn chuẩn cần dán text hoặc chọn file transcript")
+        transcript_path: Path | None = None
+        transcript_text: str | None = None
+        if alignment_mode is AlignmentMode.TRANSCRIPT and transcript:
+            try:
+                candidate = Path(transcript)
+                is_file = candidate.is_file()
+            except OSError:
+                candidate = None
+                is_file = False
+            if is_file:
+                transcript_path = candidate
+            elif candidate is not None and candidate.suffix.lower() in {
+                ".txt",
+                ".srt",
+                ".json",
+            } and ("\\" in transcript or "/" in transcript):
+                raise FileNotFoundError(f"Transcript không tồn tại: {candidate}")
+            else:
+                transcript_text = transcript
         return {
             "name": name,
             "audio": Path(self.audio_var.get()),
             "media_dir": Path(self.media_dir_var.get()),
             "alignment_mode": alignment_mode,
-            "transcript": Path(transcript) if transcript else None,
+            "transcript_path": transcript_path,
+            "transcript_text": transcript_text,
             "ordered": list(self.media_paths),
             "output": Path(self.output_var.get()),
             "draft_root": (
@@ -774,7 +794,8 @@ class SyncVideoAudioApp(ttk.Frame):
                 media_dir=request["media_dir"],
                 ordered_media_paths=request["ordered"],
                 alignment_mode=request["alignment_mode"],
-                transcript_path=request["transcript"],
+                transcript_path=request["transcript_path"],
+                transcript_text=request["transcript_text"],
                 whisper_config=WhisperConfig(model="small"),
                 config=PlannerConfig(
                     canvas=request["canvas"],

@@ -7,8 +7,12 @@ Mục tiêu của hand-off là người nhận có thể xem nhanh bằng MP4, s
 
 - `Chia đều theo audio`: chia duration audio cho media theo thứ tự đã sắp xếp.
 - `Căn chuẩn theo transcript`: nhận thêm TXT/SRT/JSON, chạy Whisper local để
-  lấy timestamp từ voice, rồi ghép dòng/cue 1 với media 001, dòng/cue 2 với
-  media 002, v.v. Số dòng/cue phải bằng số media.
+  lấy timestamp từ voice, rồi ghép câu 1 với media 001, câu 2 với
+  media 002, v.v. Số câu phải bằng số media.
+
+GUI nhận cả text dán trực tiếp và file transcript. Câu được tách theo
+`. ! ? … 。！？`, không tách theo xuống dòng. Quy tắc này hỗ trợ tiếng Nhật,
+Hàn và Trung, kể cả chuỗi CJK không có khoảng trắng.
 
 Whisper chỉ xác định timing của transcript. Tool không phân tích nội dung ảnh/video
 và không tự thay đổi thứ tự media.

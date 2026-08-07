@@ -32,6 +32,7 @@ from .transcription import (
     WhisperConfig,
     align_transcript_lines,
     load_transcript,
+    split_transcript_sentences,
 )
 
 
@@ -163,6 +164,7 @@ def build_timeline(
     ordered_media_paths: Sequence[str | Path] | None = None,
     alignment_mode: AlignmentMode = AlignmentMode.EQUAL,
     transcript_path: str | Path | None = None,
+    transcript_text: str | None = None,
     transcriber: AudioTranscriber | None = None,
     whisper_config: WhisperConfig | None = None,
     config: PlannerConfig | None = None,
@@ -180,7 +182,13 @@ def build_timeline(
         raise ValueError("audio duration must be positive")
 
     mode = AlignmentMode(alignment_mode)
-    if mapping_path and (ordered_media_paths is not None or transcript_path is not None):
+    if transcript_path is not None and transcript_text is not None:
+        raise ValueError("provide either transcript file or pasted transcript text, not both")
+    if mapping_path and (
+        ordered_media_paths is not None
+        or transcript_path is not None
+        or transcript_text is not None
+    ):
         raise ValueError("manual media order cannot be combined with a scene mapping")
     if mapping_path and mode is AlignmentMode.TRANSCRIPT:
         raise ValueError("scene mapping cannot be combined with transcript alignment")
@@ -193,13 +201,18 @@ def build_timeline(
             else sort_media(media_dir)
         )
         if mode is AlignmentMode.TRANSCRIPT:
-            if transcript_path is None:
-                raise ValueError("transcript mode requires a transcript file")
-            transcript_lines = load_transcript(transcript_path)
+            if transcript_path is None and not transcript_text:
+                raise ValueError("transcript mode requires a transcript file or pasted text")
+            transcript_lines = (
+                load_transcript(transcript_path)
+                if transcript_path is not None
+                else split_transcript_sentences(transcript_text or "")
+            )
             if len(transcript_lines) != len(media):
                 raise ValueError(
                     f"transcript có {len(transcript_lines)} câu nhưng media có {len(media)} file; "
-                    "cần đúng một dòng/câu cho mỗi file theo thứ tự đánh số"
+                    "cần đúng một câu được tách theo dấu kết câu cho mỗi file "
+                    "theo thứ tự đánh số"
                 )
             timestamp_words = (transcriber or WhisperCliTranscriber()).transcribe(
                 audio,
@@ -222,8 +235,8 @@ def build_timeline(
                 for index, (path, line) in enumerate(zip(media, aligned_lines, strict=True))
             ]
         else:
-            if transcript_path is not None:
-                raise ValueError("transcript file is only valid in transcript alignment mode")
+            if transcript_path is not None or transcript_text is not None:
+                raise ValueError("transcript is only valid in transcript alignment mode")
             ranges = _weighted_ranges(audio_duration_us, [1] * len(media))
             scenes = [
                 SceneSpec(path.resolve(), start, end - start, scene_index=index + 1)

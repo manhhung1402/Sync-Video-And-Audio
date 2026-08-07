@@ -53,22 +53,24 @@ thứ tự `001 → 002 → 003…`. Chế độ này không cần transcript ho
 
 ### 2. Căn chuẩn theo transcript
 
-Đầu vào gồm audio, transcript và thư mục media. Mỗi dòng/câu transcript tương
+Đầu vào gồm audio, transcript và thư mục media. Mỗi câu transcript tương
 ứng đúng một media theo số thứ tự:
 
 ```text
-Dòng 1  → img/vid-001
-Dòng 2  → img/vid-002
-Dòng 3  → img/vid-003
+Câu 1  → img/vid-001
+Câu 2  → img/vid-002
+Câu 3  → img/vid-003
 ```
 
-Whisper chạy local để lấy timestamp từng từ. Tool căn các dòng transcript chuẩn
+Whisper chạy local để lấy timestamp từng từ. Tool căn các câu transcript chuẩn
 vào timestamp đó, giữ cả khoảng nghỉ giữa câu, rồi dựng timeline. Không phân
 tích nội dung ảnh/video và không tự đổi thứ tự media.
 
-Transcript hỗ trợ `.txt`, `.srt`, `.json`. Với TXT, nên để đúng một câu trên
-mỗi dòng. Số dòng/câu phải bằng số media; tool sẽ báo lỗi thay vì ghép sai khi
-hai số lượng lệch nhau. Lần chạy Whisper đầu tiên sẽ tải model về cache.
+GUI cho phép dán transcript trực tiếp hoặc chọn `.txt`, `.srt`, `.json`. Câu chỉ
+được tách tại `. ! ? … 。！？`; xuống dòng chỉ được coi là khoảng trắng.
+Bộ tách và căn timestamp hỗ trợ Latin, tiếng Nhật, Hàn và Trung, kể cả
+văn bản CJK không có khoảng trắng. Số câu phải bằng số media. Lần chạy
+Whisper đầu tiên sẽ tải model về cache.
 
 ## CLI
 
@@ -117,7 +119,7 @@ Các option hữu ích:
 
 - `--mapping scenes.json`: dùng scene map thay vì chia đều.
 - `--sync-mode equal|transcript`: chọn cách căn timeline.
-- `--transcript voice.txt`: transcript chuẩn, một dòng/câu cho mỗi media.
+- `--transcript voice.txt`: transcript chuẩn, một câu được tách theo dấu kết câu cho mỗi media.
 - `--whisper-model tiny|base|small|medium|large`: model timestamp local.
 - `--width`, `--height`, `--fps`: cấu hình canvas.
 - `--image-duration 6`: số giây tối đa mỗi shot ảnh.

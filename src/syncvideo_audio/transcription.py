@@ -21,6 +21,10 @@ from typing import Any, Protocol, Sequence
 from .manifest import seconds_to_us
 
 
+SENTENCE_TERMINATORS = frozenset(".!?…。｡．！？")
+SENTENCE_CLOSERS = frozenset("\"'”’»」』】〉》〕〗〙〛)]}")
+
+
 class TranscriptionError(RuntimeError):
     """Raised when Whisper cannot produce usable timestamps."""
 
@@ -137,7 +141,7 @@ class WhisperCliTranscriber:
 
 
 def load_transcript(path: str | Path) -> list[str]:
-    """Load scene lines from TXT, SRT, or JSON transcript input."""
+    """Load TXT, SRT, or JSON and split scenes only at sentence punctuation."""
 
     source = Path(path)
     if not source.is_file():
@@ -145,17 +149,44 @@ def load_transcript(path: str | Path) -> list[str]:
     suffix = source.suffix.lower()
     text = source.read_text(encoding="utf-8-sig")
     if suffix == ".json":
-        lines = _json_transcript_lines(json.loads(text))
+        text = " ".join(_json_transcript_texts(json.loads(text)))
     elif suffix == ".srt":
-        lines = _srt_transcript_lines(text)
-    else:
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if len(lines) == 1:
-            sentences = re.split(r"(?<=[.!?…])\s+", lines[0])
-            lines = [sentence.strip() for sentence in sentences if sentence.strip()]
-    if not lines:
+        text = _srt_transcript_text(text)
+    return split_transcript_sentences(text)
+
+
+def split_transcript_sentences(text: str) -> list[str]:
+    """Split transcript by multilingual terminators, never by line breaks alone."""
+
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
         raise ValueError("transcript không có câu nào")
-    return lines
+
+    sentences: list[str] = []
+    start = 0
+    index = 0
+    while index < len(normalized):
+        character = normalized[index]
+        if character not in SENTENCE_TERMINATORS or _is_decimal_point(normalized, index):
+            index += 1
+            continue
+
+        index += 1
+        while index < len(normalized) and normalized[index] in SENTENCE_TERMINATORS:
+            index += 1
+        while index < len(normalized) and normalized[index] in SENTENCE_CLOSERS:
+            index += 1
+        sentence = normalized[start:index].strip()
+        if sentence:
+            sentences.append(sentence)
+        start = index
+
+    remainder = normalized[start:].strip()
+    if remainder:
+        sentences.append(remainder)
+    if not sentences:
+        raise ValueError("transcript không có câu nào")
+    return sentences
 
 
 def align_transcript_lines(
@@ -275,10 +306,25 @@ def _boundary_timestamp(boundary: int, token_times: Sequence[tuple[int, int]]) -
 
 def _tokens(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", text).casefold()
-    return re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
+    tokens: list[str] = []
+    buffered: list[str] = []
+    for character in normalized:
+        if _is_cjk_or_hangul(character):
+            if buffered:
+                tokens.append("".join(buffered))
+                buffered.clear()
+            tokens.append(character)
+        elif character.isalnum() or unicodedata.category(character).startswith("M"):
+            buffered.append(character)
+        elif buffered:
+            tokens.append("".join(buffered))
+            buffered.clear()
+    if buffered:
+        tokens.append("".join(buffered))
+    return tokens
 
 
-def _json_transcript_lines(payload: Any) -> list[str]:
+def _json_transcript_texts(payload: Any) -> list[str]:
     entries = payload.get("scenes", payload.get("segments", payload)) if isinstance(payload, dict) else payload
     if not isinstance(entries, list):
         raise ValueError("transcript JSON phải là array hoặc object có scenes/segments")
@@ -295,8 +341,8 @@ def _json_transcript_lines(payload: Any) -> list[str]:
     return lines
 
 
-def _srt_transcript_lines(text: str) -> list[str]:
-    lines: list[str] = []
+def _srt_transcript_text(text: str) -> str:
+    cues: list[str] = []
     for block in re.split(r"\r?\n\s*\r?\n", text.strip()):
         content = [
             line.strip()
@@ -304,8 +350,35 @@ def _srt_transcript_lines(text: str) -> list[str]:
             if line.strip() and not line.strip().isdigit() and "-->" not in line
         ]
         if content:
-            lines.append(" ".join(content))
-    return lines
+            cues.append(" ".join(content))
+    return " ".join(cues)
+
+
+def _is_decimal_point(text: str, index: int) -> bool:
+    return (
+        text[index] == "."
+        and index > 0
+        and index + 1 < len(text)
+        and text[index - 1].isdigit()
+        and text[index + 1].isdigit()
+    )
+
+
+def _is_cjk_or_hangul(character: str) -> bool:
+    codepoint = ord(character)
+    return any(
+        start <= codepoint <= end
+        for start, end in (
+            (0x3040, 0x30FF),  # Hiragana and Katakana
+            (0x31F0, 0x31FF),  # Katakana phonetic extensions
+            (0x3400, 0x4DBF),  # CJK extension A
+            (0x4E00, 0x9FFF),  # Unified CJK ideographs
+            (0xF900, 0xFAFF),  # CJK compatibility ideographs
+            (0x1100, 0x11FF),  # Hangul jamo
+            (0x3130, 0x318F),  # Hangul compatibility jamo
+            (0xAC00, 0xD7AF),  # Hangul syllables
+        )
+    )
 
 
 def _normalize_language(language: str) -> str:

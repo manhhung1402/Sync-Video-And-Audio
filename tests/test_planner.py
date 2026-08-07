@@ -110,7 +110,7 @@ def test_transcript_mode_pairs_numbered_media_with_timestamped_lines(tmp_path: P
     assert transcriber.calls[0][1] == "Câu đầu tiên.\nCâu thứ hai."
 
 
-def test_transcript_mode_requires_one_line_per_media(tmp_path: Path) -> None:
+def test_transcript_mode_requires_one_sentence_per_media(tmp_path: Path) -> None:
     audio = touch(tmp_path / "audio.wav")
     media = tmp_path / "media"
     media.mkdir()
@@ -119,7 +119,7 @@ def test_transcript_mode_requires_one_line_per_media(tmp_path: Path) -> None:
     transcript = tmp_path / "transcript.txt"
     transcript.write_text("Chỉ có một câu không dấu câu", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="một dòng/câu cho mỗi file"):
+    with pytest.raises(ValueError, match="một câu được tách theo dấu kết câu"):
         build_timeline(
             project_name="mismatch",
             audio_path=audio,
@@ -129,6 +129,30 @@ def test_transcript_mode_requires_one_line_per_media(tmp_path: Path) -> None:
             transcriber=FakeTranscriber([]),
             probe=FakeProbe({"audio.wav": 3}),
         )
+
+
+def test_transcript_mode_accepts_pasted_text_and_splits_on_punctuation(tmp_path: Path) -> None:
+    audio = touch(tmp_path / "audio.wav")
+    media = tmp_path / "media"
+    media.mkdir()
+    touch(media / "img-001.png")
+    touch(media / "img-002.png")
+    transcriber = FakeTranscriber([
+        TimedWord("朝", 100_000, 500_000),
+        TimedWord("鳥", 1_500_000, 1_900_000),
+    ])
+
+    project = build_timeline(
+        project_name="pasted-transcript",
+        audio_path=audio,
+        media_dir=media,
+        alignment_mode=AlignmentMode.TRANSCRIPT,
+        transcript_text="朝です。\n鳥です。",
+        transcriber=transcriber,
+        probe=FakeProbe({"audio.wav": 2}),
+    )
+
+    assert [caption.text for caption in project.captions] == ["朝です。", "鳥です。"]
 
 
 def test_planner_without_mapping_fills_audio_and_expands_long_stills(tmp_path: Path) -> None:
