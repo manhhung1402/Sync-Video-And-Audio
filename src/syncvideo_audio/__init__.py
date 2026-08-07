@@ -1,5 +1,7 @@
 """SyncVideo-Audio core package."""
 
+from .capcut_exporter import CapCutDraftExporter, CapCutExportError, CapCutExportResult
+
 from .manifest import (
     AudioTrack,
     CanvasSpec,
@@ -16,6 +18,9 @@ from .probe import FfprobeMediaProbe, MediaInfo, ProbeError
 
 __all__ = [
     "AudioTrack",
+    "CapCutDraftExporter",
+    "CapCutExportError",
+    "CapCutExportResult",
     "CanvasSpec",
     "MediaType",
     "MotionPreset",
