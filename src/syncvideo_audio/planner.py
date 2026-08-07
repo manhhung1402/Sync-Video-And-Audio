@@ -1,0 +1,323 @@
+"""Deterministic audio/media timeline planning.
+
+This module borrows the proven concepts from Auto-Grok (numbered media order,
+scene mappings, still-shot expansion, and bounded video speed) while keeping a
+clean implementation and a backend-neutral output.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from .manifest import (
+    AudioTrack,
+    CanvasSpec,
+    MediaType,
+    MotionPreset,
+    TimelineCaption,
+    TimelineClip,
+    TimelineProject,
+    seconds_to_us,
+)
+from .probe import FfprobeMediaProbe, MediaProbe
+
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
+MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+NUMBERED_MEDIA_RE = re.compile(r"^(?:img|vid)-(\d+)(?:-|\.|$)", re.IGNORECASE)
+MOTION_CYCLE = (
+    MotionPreset.ZOOM_IN,
+    MotionPreset.ZOOM_OUT,
+    MotionPreset.PAN_LEFT_RIGHT,
+    MotionPreset.PAN_RIGHT_LEFT,
+    MotionPreset.PAN_TOP_BOTTOM,
+    MotionPreset.PAN_BOTTOM_TOP,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PlannerConfig:
+    canvas: CanvasSpec = CanvasSpec()
+    image_shot_duration_us: int = seconds_to_us(6.0)
+    min_video_speed: float = 0.25
+    max_video_speed: float = 4.0
+    add_captions: bool = True
+    motion_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if self.image_shot_duration_us <= 0:
+            raise ValueError("image shot duration must be positive")
+        if not 0 < self.min_video_speed <= self.max_video_speed:
+            raise ValueError("video speed range is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class SceneSpec:
+    path: Path
+    start_us: int
+    duration_us: int
+    text: str = ""
+    scene_index: int = 1
+
+    @property
+    def end_us(self) -> int:
+        return self.start_us + self.duration_us
+
+
+def sort_media(media_dir: str | Path) -> list[Path]:
+    """Return supported media in numeric img-/vid- order, then alphabetically."""
+
+    root = Path(media_dir)
+    if not root.is_dir():
+        raise FileNotFoundError(f"media directory does not exist: {root}")
+    files = [path for path in root.iterdir() if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS]
+    if not files:
+        raise FileNotFoundError(f"no supported images or videos found in: {root}")
+
+    def key(path: Path) -> tuple[int, int, str]:
+        match = NUMBERED_MEDIA_RE.match(path.name)
+        if match:
+            return (0, int(match.group(1)), path.name.lower())
+        return (1, 0, path.name.lower())
+
+    return sorted(files, key=key)
+
+
+def load_scene_mapping(
+    mapping_path: str | Path,
+    media_dir: str | Path,
+    audio_duration_us: int,
+) -> list[SceneSpec]:
+    """Load manual timestamps or proportionally place ordered story scenes."""
+
+    source = Path(mapping_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    entries = payload.get("scenes") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list) or not entries or not all(isinstance(item, dict) for item in entries):
+        raise ValueError("mapping must be a non-empty array or an object containing scenes")
+
+    media = sort_media(media_dir)
+    root = Path(media_dir).resolve()
+    has_all_timestamps = all("audio_start" in item and "audio_end" in item for item in entries)
+    has_any_timestamp = any("audio_start" in item or "audio_end" in item for item in entries)
+    if has_any_timestamp and not has_all_timestamps:
+        raise ValueError("every mapped scene must provide both audio_start and audio_end")
+
+    if has_all_timestamps:
+        boundaries = [
+            (seconds_to_us(float(item["audio_start"])), seconds_to_us(float(item["audio_end"])))
+            for item in entries
+        ]
+    else:
+        weights = [_word_weight(_scene_text(item)) for item in entries]
+        boundaries = _weighted_ranges(audio_duration_us, weights)
+
+    scenes: list[SceneSpec] = []
+    previous_end = 0
+    for index, (item, (start_us, end_us)) in enumerate(zip(entries, boundaries, strict=True)):
+        if start_us < previous_end:
+            raise ValueError(f"mapping scene {index + 1} overlaps the previous scene")
+        if end_us <= start_us:
+            raise ValueError(f"mapping scene {index + 1} has a non-positive duration")
+        if end_us > audio_duration_us:
+            raise ValueError(f"mapping scene {index + 1} exceeds audio duration")
+        path = _resolve_media(item, root, media, index)
+        scenes.append(
+            SceneSpec(
+                path=path,
+                start_us=start_us,
+                duration_us=end_us - start_us,
+                text=_scene_text(item),
+                scene_index=_scene_number(item, index),
+            )
+        )
+        previous_end = end_us
+    return scenes
+
+
+def build_timeline(
+    *,
+    project_name: str,
+    audio_path: str | Path,
+    media_dir: str | Path,
+    mapping_path: str | Path | None = None,
+    config: PlannerConfig | None = None,
+    probe: MediaProbe | None = None,
+) -> TimelineProject:
+    """Plan an editable timeline without rendering media."""
+
+    cfg = config or PlannerConfig()
+    media_probe = probe or FfprobeMediaProbe()
+    audio = Path(audio_path).resolve()
+    if not audio.is_file():
+        raise FileNotFoundError(f"audio file does not exist: {audio}")
+    audio_duration_us = media_probe.probe(audio).duration_us
+    if audio_duration_us <= 0:
+        raise ValueError("audio duration must be positive")
+
+    if mapping_path:
+        scenes = load_scene_mapping(mapping_path, media_dir, audio_duration_us)
+    else:
+        media = sort_media(media_dir)
+        ranges = _weighted_ranges(audio_duration_us, [1] * len(media))
+        scenes = [
+            SceneSpec(path.resolve(), start, end - start, scene_index=index + 1)
+            for index, (path, (start, end)) in enumerate(zip(media, ranges, strict=True))
+        ]
+
+    clips: list[TimelineClip] = []
+    captions: list[TimelineCaption] = []
+    motion_index = 0
+    for scene in scenes:
+        suffix = scene.path.suffix.lower()
+        if suffix in IMAGE_EXTENSIONS:
+            image_clips = _plan_image(scene, cfg, motion_index)
+            clips.extend(image_clips)
+            motion_index += len(image_clips)
+        elif suffix in VIDEO_EXTENSIONS:
+            clips.extend(_plan_video(scene, cfg, media_probe.probe(scene.path).duration_us))
+        else:
+            raise ValueError(f"unsupported scene media: {scene.path}")
+        if cfg.add_captions and scene.text.strip():
+            captions.append(TimelineCaption(scene.text.strip(), scene.start_us, scene.duration_us))
+
+    project = TimelineProject(
+        name=project_name,
+        canvas=cfg.canvas,
+        audio=AudioTrack(audio, audio_duration_us),
+        clips=clips,
+        captions=captions,
+    )
+    _validate_contiguous(project.clips, project.duration_us)
+    return project
+
+
+def _plan_image(scene: SceneSpec, config: PlannerConfig, motion_index: int) -> list[TimelineClip]:
+    shot_count = max(1, round(scene.duration_us / config.image_shot_duration_us))
+    ranges = _equal_ranges(scene.start_us, scene.duration_us, shot_count)
+    return [
+        TimelineClip(
+            media_type=MediaType.IMAGE,
+            path=scene.path.resolve(),
+            start_us=start,
+            duration_us=end - start,
+            motion=(
+                MOTION_CYCLE[(motion_index + shot_index) % len(MOTION_CYCLE)]
+                if config.motion_enabled
+                else MotionPreset.NONE
+            ),
+            scene_index=scene.scene_index,
+        )
+        for shot_index, (start, end) in enumerate(ranges)
+    ]
+
+
+def _plan_video(
+    scene: SceneSpec,
+    config: PlannerConfig,
+    source_duration_us: int,
+) -> list[TimelineClip]:
+    if source_duration_us <= 0:
+        raise ValueError(f"video duration must be positive: {scene.path}")
+    raw_speed = source_duration_us / scene.duration_us
+    if raw_speed > config.max_video_speed:
+        speed = config.max_video_speed
+        used_source_us = max(1, round(scene.duration_us * speed))
+        loop_count = 1
+    elif raw_speed < config.min_video_speed:
+        loop_count = max(1, math.ceil(config.min_video_speed * scene.duration_us / source_duration_us))
+        speed = source_duration_us * loop_count / scene.duration_us
+        used_source_us = source_duration_us
+    else:
+        speed = raw_speed
+        used_source_us = source_duration_us
+        loop_count = 1
+
+    ranges = _equal_ranges(scene.start_us, scene.duration_us, loop_count)
+    return [
+        TimelineClip(
+            media_type=MediaType.VIDEO,
+            path=scene.path.resolve(),
+            start_us=start,
+            duration_us=end - start,
+            source_duration_us=used_source_us,
+            speed=speed,
+            volume=0.0,
+            scene_index=scene.scene_index,
+        )
+        for start, end in ranges
+    ]
+
+
+def _resolve_media(item: Mapping[str, Any], root: Path, media: Sequence[Path], index: int) -> Path:
+    requested = [item.get("clip"), item.get("imageFile"), item.get("image_file")]
+    for raw_name in requested:
+        if not raw_name:
+            continue
+        name = str(raw_name).strip()
+        candidate = (root / name).resolve()
+        if (candidate == root or root in candidate.parents) and candidate.is_file() and candidate.suffix.lower() in MEDIA_EXTENSIONS:
+            return candidate
+        suffix_matches = [path for path in media if path.name.lower().endswith(name.lower())]
+        if len(suffix_matches) == 1:
+            return suffix_matches[0].resolve()
+
+    number = _scene_number(item, index)
+    for path in media:
+        match = NUMBERED_MEDIA_RE.match(path.name)
+        if match and int(match.group(1)) == number:
+            return path.resolve()
+    if index < len(media):
+        return media[index].resolve()
+    raise FileNotFoundError(f"no media found for scene {number}")
+
+
+def _scene_number(item: Mapping[str, Any], index: int) -> int:
+    raw = item.get("sceneIndex", item.get("scene_index", index + 1))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return index + 1
+
+
+def _scene_text(item: Mapping[str, Any]) -> str:
+    return str(item.get("sourceText", item.get("source_text", item.get("text", ""))))
+
+
+def _word_weight(text: str) -> int:
+    return max(1, len(re.findall(r"\w+", text, flags=re.UNICODE)))
+
+
+def _weighted_ranges(total_us: int, weights: Sequence[int]) -> list[tuple[int, int]]:
+    if total_us <= 0 or not weights or any(weight <= 0 for weight in weights):
+        raise ValueError("duration and weights must be positive")
+    weight_total = sum(weights)
+    boundaries = [0]
+    cumulative = 0
+    for weight in weights[:-1]:
+        cumulative += weight
+        boundaries.append(round(total_us * cumulative / weight_total))
+    boundaries.append(total_us)
+    return list(zip(boundaries, boundaries[1:]))
+
+
+def _equal_ranges(start_us: int, duration_us: int, count: int) -> list[tuple[int, int]]:
+    boundaries = [start_us + round(duration_us * index / count) for index in range(count)]
+    boundaries.append(start_us + duration_us)
+    return list(zip(boundaries, boundaries[1:]))
+
+
+def _validate_contiguous(clips: Sequence[TimelineClip], duration_us: int) -> None:
+    cursor = 0
+    for index, clip in enumerate(clips):
+        if clip.start_us != cursor:
+            raise ValueError(f"visual timeline has a gap before clip {index}")
+        cursor = clip.end_us
+    if cursor != duration_us:
+        raise ValueError("visual timeline duration does not match audio duration")
