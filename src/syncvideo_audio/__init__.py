@@ -2,6 +2,8 @@
 
 from .capcut_exporter import CapCutDraftExporter, CapCutExportError, CapCutExportResult
 from .capcut_keyframes import MotionSettings, apply_motion_keyframes
+from .capcut_registry import CapCutRegistry
+from .ffmpeg_renderer import FfmpegRenderer, RenderConfig, RenderError
 
 from .manifest import (
     AudioTrack,
@@ -15,6 +17,7 @@ from .manifest import (
     us_to_seconds,
 )
 from .planner import PlannerConfig, SceneSpec, build_timeline, load_scene_mapping, sort_media
+from .pipeline import OutputMode, PipelineOutputs, export_timeline
 from .probe import FfprobeMediaProbe, MediaInfo, ProbeError
 
 __all__ = [
@@ -22,10 +25,14 @@ __all__ = [
     "CapCutDraftExporter",
     "CapCutExportError",
     "CapCutExportResult",
+    "CapCutRegistry",
     "CanvasSpec",
     "MediaType",
     "MotionPreset",
     "MotionSettings",
+    "FfmpegRenderer",
+    "OutputMode",
+    "PipelineOutputs",
     "TimelineCaption",
     "TimelineClip",
     "TimelineProject",
@@ -35,8 +42,11 @@ __all__ = [
     "MediaInfo",
     "PlannerConfig",
     "ProbeError",
+    "RenderConfig",
+    "RenderError",
     "SceneSpec",
     "build_timeline",
+    "export_timeline",
     "apply_motion_keyframes",
     "load_scene_mapping",
     "sort_media",
