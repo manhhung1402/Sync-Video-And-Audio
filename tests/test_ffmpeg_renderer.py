@@ -6,9 +6,10 @@ from syncvideo_audio import (
     MediaType,
     MotionPreset,
     TimelineClip,
+    TimelineCaption,
     TimelineProject,
 )
-from syncvideo_audio.ffmpeg_renderer import build_image_filter, build_video_filter
+from syncvideo_audio.ffmpeg_renderer import build_ass_subtitles, build_image_filter, build_video_filter
 from syncvideo_audio.ffmpeg_renderer import _timeline_frame_count
 
 
@@ -66,3 +67,21 @@ def test_frame_allocation_never_ends_before_audio(tmp_path: Path) -> None:
     ]
     assert counts == [15, 15, 15]
     assert sum(counts) / timeline.canvas.fps >= 3.7
+
+
+def test_ass_subtitles_preserve_multilingual_caption_text(tmp_path: Path) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    timeline = TimelineProject(
+        "captions",
+        CanvasSpec(1080, 1920, 30),
+        AudioTrack(audio, 3_000_000),
+        [TimelineClip(MediaType.IMAGE, tmp_path / "image.png", 0, 3_000_000)],
+        captions=[
+            TimelineCaption("Xin chào 世界。 안녕하세요!", 0, 3_000_000),
+        ],
+    )
+    ass = build_ass_subtitles(timeline)
+    assert "PlayResX: 1080" in ass
+    assert "Dialogue: 0,0:00:00.00,0:00:03.00" in ass
+    assert "Xin chào 世界。 안녕하세요!" in ass

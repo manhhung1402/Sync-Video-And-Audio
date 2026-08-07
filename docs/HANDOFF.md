@@ -17,6 +17,11 @@ Hàn và Trung, kể cả chuỗi CJK không có khoảng trắng.
 Whisper chỉ xác định timing của transcript. Tool không phân tích nội dung ảnh/video
 và không tự thay đổi thứ tự media.
 
+Nếu bật `Burn caption vào MP4 preview`, caption được render cố định vào file MP4;
+các mốc caption vẫn nằm trong manifest để tiếp tục căn/chỉnh khi dựng trong CapCut.
+Draft native hiện chưa tự tạo text track CapCut. Nếu tên project đã tồn tại, hand-off
+mới tự dùng hậu tố `(2)`, `(3)`... để không ghi đè output/draft cũ.
+
 ## Người tạo project
 
 1. Đóng project CapCut đang mở.

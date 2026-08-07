@@ -6,5 +6,10 @@ __pycache__/
 venv/
 build/
 dist/
+dist-full/
+dist-installer/
+assets/models/
+assets/tools/
+assets/logo-source-chroma.png
+tools/
 *.egg-info/
-

@@ -11,6 +11,9 @@ schema quan sát từ **CapCut International 9.1.0**.
 ## Chức năng
 
 - Hai chế độ đồng bộ: chia đều hoặc căn chuẩn theo transcript + Whisper timestamp.
+- MP4 preview có thể burn caption cố định; caption vẫn được lưu theo mốc trong manifest để tiếp tục dựng trong CapCut.
+- Tự thêm chỉ số `(2)`, `(3)`... khi tên project đã tồn tại.
+- Progress bar theo dõi Whisper, render MP4, copy asset và CapCut export.
 - Tự xếp file có prefix `img-001`, `vid-002`, ...; file không có số đứng sau.
 - Cho phép đổi thứ tự thủ công trong GUI.
 - Căn đều theo độ dài audio hoặc nhận `mapping.json` có timestamp từng cảnh.
@@ -26,7 +29,7 @@ schema quan sát từ **CapCut International 9.1.0**.
 
 - Windows 10/11, Python 3.10 trở lên.
 - `ffmpeg` và `ffprobe` có trong `PATH`.
-- Chế độ căn transcript cần OpenAI Whisper CLI: `pip install openai-whisper`.
+- Chế độ căn transcript cần backend Whisper local: `pip install -e ".[transcribe]"`.
 - CapCut International 9.1 được khuyến nghị cho native draft.
 
 ## Cài và chạy GUI
@@ -124,8 +127,18 @@ Các option hữu ích:
 - `--width`, `--height`, `--fps`: cấu hình canvas.
 - `--image-duration 6`: số giây tối đa mỗi shot ảnh.
 - `--no-motion`: không tạo motion/keyframe.
+- GUI: bật `Burn caption vào MP4 preview` để hard-burn caption vào video xem trước.
 - `--no-register`: tạo folder draft nhưng không sửa registry CapCut.
 - `--overwrite-mp4`: cho phép ghi đè bản MP4.
+
+## Bộ cài cho khách hàng
+
+Payload full được build onedir bằng `packaging/build_full.ps1`. Payload bao gồm
+GUI không console, FFmpeg/ffprobe, font Noto Sans CJK và model faster-whisper small;
+khách hàng không cần cài Python hay FFmpeg riêng. Nếu máy build có Inno Setup,
+script tự sinh `dist-installer/SyncVideo-Audio-Setup-0.1.0.exe` và shortcut desktop.
+
+Tác giả hiển thị trong giao diện và metadata: **YudgnuH (Nguyễn Duy Hưng)**.
 
 ## Scene mapping
 

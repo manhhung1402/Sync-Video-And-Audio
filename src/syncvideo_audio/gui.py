@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import queue
-import shutil
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -14,6 +13,7 @@ from .capcut_registry import CapCutRegistry
 from .manifest import CanvasSpec, seconds_to_us
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
 from .planner import AlignmentMode, PlannerConfig, build_timeline, sort_media
+from .runtime import resolve_executable, resource_path
 from .transcription import WhisperConfig
 
 
@@ -287,6 +287,7 @@ class SyncVideoAudioApp(ttk.Frame):
         self.canvas_var = tk.StringVar(value=next(iter(CANVAS_PRESETS)))
         self.image_duration_var = tk.StringVar(value="6")
         self.motion_var = tk.BooleanVar(value=True)
+        self.burn_caption_var = tk.BooleanVar(value=True)
         self.register_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Sẵn sàng để tạo project")
         self.media_count_var = tk.StringVar(value="Chưa có media")
@@ -294,6 +295,10 @@ class SyncVideoAudioApp(ttk.Frame):
 
     def _build_ui(self) -> None:
         self.master.title("SyncVideo-Audio · CapCut Hand-off Studio")
+        try:
+            self.master.iconbitmap(default=str(resource_path("assets/logo.ico")))
+        except (OSError, tk.TclError):
+            pass
         self.master.geometry("1180x880")
         self.master.minsize(1000, 760)
         self.grid(sticky="nsew")
@@ -314,22 +319,28 @@ class SyncVideoAudioApp(ttk.Frame):
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
         header.columnconfigure(1, weight=1)
 
-        logo = tk.Label(
-            header,
-            text="S/A",
-            background=COLORS["accent"],
-            foreground=COLORS["accent_text"],
-            font=("Segoe UI Semibold", 13),
-            width=4,
-            height=2,
-        )
+        logo_path = resource_path("assets/logo-64.png")
+        try:
+            self.logo_image = tk.PhotoImage(file=str(logo_path))
+            logo = tk.Label(header, image=self.logo_image, background=COLORS["background"])
+        except tk.TclError:
+            self.logo_image = None
+            logo = tk.Label(
+                header,
+                text="S/A",
+                background=COLORS["accent"],
+                foreground=COLORS["accent_text"],
+                font=("Segoe UI Semibold", 13),
+                width=4,
+                height=2,
+            )
         logo.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 14))
         ttk.Label(header, text="CapCut Hand-off Studio", style="Title.TLabel").grid(
             row=0, column=1, sticky="sw"
         )
         ttk.Label(
             header,
-            text="Đồng bộ hình ảnh với audio · Xuất MP4 preview và project editable",
+            text="Đồng bộ hình ảnh với audio · Xuất MP4 preview và project editable · YudgnuH (Nguyễn Duy Hưng)",
             style="Subtitle.TLabel",
         ).grid(row=1, column=1, sticky="nw", pady=(2, 0))
         self.runtime_badge = ttk.Label(
@@ -497,11 +508,17 @@ class SyncVideoAudioApp(ttk.Frame):
             variable=self.register_var,
             style="Dark.TCheckbutton",
         ).grid(row=0, column=1, sticky="w", padx=(24, 0))
+        ttk.Checkbutton(
+            checks,
+            text="Burn caption vào MP4 preview",
+            variable=self.burn_caption_var,
+            style="Dark.TCheckbutton",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Label(
             checks,
             text="Đóng project đang mở trong CapCut trước khi tạo draft.",
             style="CardMuted.TLabel",
-        ).grid(row=0, column=2, sticky="e", padx=(24, 0))
+        ).grid(row=1, column=1, columnspan=2, sticky="e", padx=(24, 0), pady=(8, 0))
         checks.columnconfigure(2, weight=1)
 
     def _build_action_bar(self) -> None:
@@ -535,7 +552,8 @@ class SyncVideoAudioApp(ttk.Frame):
         self.build_button.grid(row=0, column=3)
         self.progress = ttk.Progressbar(
             action,
-            mode="indeterminate",
+            mode="determinate",
+            maximum=100,
             style="Accent.Horizontal.TProgressbar",
         )
         self.progress.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(12, 0))
@@ -705,8 +723,16 @@ class SyncVideoAudioApp(ttk.Frame):
                 capcut_ready = True
         except (OSError, ValueError):
             pass
-        ffmpeg_ready = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
-        whisper_ready = shutil.which("whisper") is not None
+        ffmpeg_ready = Path(resolve_executable("ffmpeg")).is_file() and Path(
+            resolve_executable("ffprobe")
+        ).is_file()
+        try:
+            from .transcription import _faster_whisper
+            whisper_ready = True
+            if _faster_whisper is None:
+                raise ImportError
+        except ImportError:
+            whisper_ready = Path(resolve_executable("whisper")).is_file()
         if capcut_ready and ffmpeg_ready and whisper_ready:
             self.runtime_var.set("●  CapCut + FFmpeg + Whisper")
             self.runtime_badge.configure(style="Badge.TLabel")
@@ -726,7 +752,7 @@ class SyncVideoAudioApp(ttk.Frame):
             return
         self.build_button.configure(state="disabled", text="Đang xử lý…")
         self.progress.grid()
-        self.progress.start(12)
+        self.progress.configure(value=0)
         if ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT:
             self.status_var.set("Whisper đang lấy timestamp và căn transcript…")
         else:
@@ -783,6 +809,7 @@ class SyncVideoAudioApp(ttk.Frame):
             "canvas": CANVAS_PRESETS[self.canvas_var.get()],
             "image_duration": seconds_to_us(duration),
             "motion": self.motion_var.get(),
+            "burn_captions": self.burn_caption_var.get(),
             "register": self.register_var.get(),
         }
 
@@ -797,6 +824,9 @@ class SyncVideoAudioApp(ttk.Frame):
                 transcript_path=request["transcript_path"],
                 transcript_text=request["transcript_text"],
                 whisper_config=WhisperConfig(model="small"),
+                progress_callback=lambda value, message: self._emit_progress(
+                    0.02 + value * 0.18, message
+                ),
                 config=PlannerConfig(
                     canvas=request["canvas"],
                     image_shot_duration_us=int(request["image_duration"]),
@@ -809,15 +839,28 @@ class SyncVideoAudioApp(ttk.Frame):
                 output_dir=request["output"],
                 draft_root=request["draft_root"],
                 register_with_capcut=bool(request["register"]),
+                burn_captions=bool(request["burn_captions"]),
+                progress_callback=lambda value, message: self._emit_progress(
+                    0.20 + value * 0.80, message
+                ),
             )
             self.events.put(("done", outputs))
         except BaseException as error:
             self.events.put(("error", error))
 
+    def _emit_progress(self, value: float, message: str) -> None:
+        self.events.put(("progress", (value, message)))
+
     def _poll_events(self) -> None:
         try:
             kind, payload = self.events.get_nowait()
         except queue.Empty:
+            self.after(100, self._poll_events)
+            return
+        if kind == "progress":
+            value, message = payload
+            self.progress.configure(value=float(value) * 100)
+            self.status_var.set(str(message))
             self.after(100, self._poll_events)
             return
         self.progress.stop()

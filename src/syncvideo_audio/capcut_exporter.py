@@ -22,6 +22,7 @@ from .capcut_schema import (
 )
 from .manifest import MediaType, TimelineProject
 from .probe import FfprobeMediaProbe, MediaInfo, MediaProbe, ProbeError
+from .runtime import ProgressCallback, report_progress
 
 
 class CapCutExportError(RuntimeError):
@@ -52,6 +53,7 @@ class CapCutDraftExporter:
         *,
         folder_name: str | None = None,
         copy_assets: bool = True,
+        progress_callback: ProgressCallback | None = None,
     ) -> CapCutExportResult:
         """Create a complete draft directory without exposing partial output."""
 
@@ -70,7 +72,9 @@ class CapCutDraftExporter:
         try:
             staging.mkdir()
             assets = staging / "Resources" / "syncvideo_media"
-            staged_asset_paths = self._prepare_assets(project, assets, copy_assets, copied_assets)
+            staged_asset_paths = self._prepare_assets(
+                project, assets, copy_assets, copied_assets, progress_callback
+            )
             asset_paths = {
                 source: (destination / path.relative_to(staging) if copy_assets else path)
                 for source, path in staged_asset_paths.items()
@@ -87,6 +91,7 @@ class CapCutDraftExporter:
             raise
 
         final_assets = tuple(destination / path.relative_to(staging) for path in copied_assets)
+        report_progress(progress_callback, 1.0, "Đã tạo xong CapCut draft")
         return CapCutExportResult(destination, draft_id, timeline_id, final_assets)
 
     def _prepare_assets(
@@ -95,10 +100,16 @@ class CapCutDraftExporter:
         assets: Path,
         copy_assets: bool,
         copied_assets: list[Path],
+        progress_callback: ProgressCallback | None,
     ) -> dict[Path, Path]:
         sources = [project.audio.path, *(clip.path for clip in project.clips)]
         unique: dict[Path, Path] = {}
-        for source_value in sources:
+        for index, source_value in enumerate(sources):
+            report_progress(
+                progress_callback,
+                0.05 + 0.45 * index / max(1, len(sources)),
+                f"Đang copy asset {index + 1}/{len(sources)}…",
+            )
             source = Path(source_value).resolve()
             if not source.is_file():
                 raise FileNotFoundError(f"media file does not exist: {source}")
@@ -195,12 +206,15 @@ class CapCutDraftExporter:
         _write_json(staging / "key_value.json", {})
 
 
-def _safe_folder_name(value: str) -> str:
+def safe_folder_name(value: str) -> str:
     invalid = '<>:"/\\|?*'
     cleaned = "".join("_" if char in invalid or ord(char) < 32 else char for char in value).strip(" .")
     if not cleaned:
         raise ValueError("CapCut draft folder name is empty after sanitization")
     return cleaned
+
+
+_safe_folder_name = safe_folder_name
 
 
 def _write_json(path: Path, value: Any) -> None:

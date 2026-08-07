@@ -26,11 +26,12 @@ from .manifest import (
     seconds_to_us,
 )
 from .probe import FfprobeMediaProbe, MediaProbe
+from .runtime import ProgressCallback, report_progress
 from .transcription import (
     AudioTranscriber,
-    WhisperCliTranscriber,
     WhisperConfig,
     align_transcript_lines,
+    default_transcriber,
     load_transcript,
     split_transcript_sentences,
 )
@@ -169,12 +170,14 @@ def build_timeline(
     whisper_config: WhisperConfig | None = None,
     config: PlannerConfig | None = None,
     probe: MediaProbe | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> TimelineProject:
     """Plan an editable timeline without rendering media."""
 
     cfg = config or PlannerConfig()
     media_probe = probe or FfprobeMediaProbe()
     audio = Path(audio_path).resolve()
+    report_progress(progress_callback, 0.0, "Đang kiểm tra audio và thứ tự media…")
     if not audio.is_file():
         raise FileNotFoundError(f"audio file does not exist: {audio}")
     audio_duration_us = media_probe.probe(audio).duration_us
@@ -214,10 +217,11 @@ def build_timeline(
                     "cần đúng một câu được tách theo dấu kết câu cho mỗi file "
                     "theo thứ tự đánh số"
                 )
-            timestamp_words = (transcriber or WhisperCliTranscriber()).transcribe(
+            timestamp_words = (transcriber or default_transcriber()).transcribe(
                 audio,
                 transcript_hint="\n".join(transcript_lines),
                 config=whisper_config or WhisperConfig(),
+                progress_callback=progress_callback,
             )
             aligned_lines = align_transcript_lines(
                 transcript_lines,
@@ -274,6 +278,7 @@ def build_timeline(
         captions=captions,
     )
     _validate_contiguous(project.clips, project.duration_us)
+    report_progress(progress_callback, 1.0, "Đã lập xong timeline")
     return project
 
 

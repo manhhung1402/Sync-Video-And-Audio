@@ -19,6 +19,18 @@ from pathlib import Path
 from typing import Any, Protocol, Sequence
 
 from .manifest import seconds_to_us
+from .runtime import (
+    ProgressCallback,
+    hidden_subprocess_kwargs,
+    report_progress,
+    resolve_executable,
+    resource_path,
+)
+
+try:
+    import faster_whisper as _faster_whisper
+except ImportError:
+    _faster_whisper = None
 
 
 SENTENCE_TERMINATORS = frozenset(".!?…。｡．！？")
@@ -67,7 +79,73 @@ class AudioTranscriber(Protocol):
         *,
         transcript_hint: str,
         config: WhisperConfig,
+        progress_callback: ProgressCallback | None = None,
     ) -> list[TimedWord]: ...
+
+
+class FasterWhisperTranscriber:
+    """In-process Whisper backend used by the packaged, console-free app."""
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        transcript_hint: str,
+        config: WhisperConfig,
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[TimedWord]:
+        if _faster_whisper is None:
+            raise TranscriptionError("faster-whisper chưa được cài")
+
+        source = Path(audio_path).resolve()
+        cache_dir = _whisper_cache_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        model_dir = resource_path(f"models/{config.model}")
+        model_source = str(model_dir) if model_dir.is_dir() else config.model
+        report_progress(progress_callback, 0.0, "Đang nạp model Whisper…")
+        model = _faster_whisper.WhisperModel(
+            model_source,
+            device="cpu",
+            compute_type="int8",
+            download_root=str(cache_dir),
+        )
+        prompt = re.sub(r"\s+", " ", transcript_hint).strip()[:2000] or None
+        segments, _info = model.transcribe(
+            str(source),
+            language=_normalize_language(config.language) if config.language else None,
+            word_timestamps=True,
+            initial_prompt=prompt,
+            vad_filter=False,
+        )
+        words: list[TimedWord] = []
+        for segment in segments:
+            segment_words = getattr(segment, "words", None) or []
+            if segment_words:
+                for word in segment_words:
+                    start_us = seconds_to_us(float(word.start))
+                    end_us = seconds_to_us(float(word.end))
+                    if str(word.word).strip() and end_us > start_us:
+                        words.append(TimedWord(str(word.word).strip(), start_us, end_us))
+            elif str(segment.text).strip():
+                start_us = seconds_to_us(float(segment.start))
+                end_us = seconds_to_us(float(segment.end))
+                if end_us > start_us:
+                    words.append(TimedWord(str(segment.text).strip(), start_us, end_us))
+            report_progress(
+                progress_callback,
+                min(0.95, max(0.05, float(getattr(segment, "end", 0.0)) / 600.0)),
+                "Whisper đang lấy timestamp…",
+            )
+        if not words:
+            raise TranscriptionError("Whisper không nhận diện được từ nào trong audio")
+        report_progress(progress_callback, 1.0, "Whisper đã lấy xong timestamp")
+        return sorted(words, key=lambda word: (word.start_us, word.end_us))
+
+
+def default_transcriber() -> AudioTranscriber:
+    if _faster_whisper is None:
+        return WhisperCliTranscriber()
+    return FasterWhisperTranscriber()
 
 
 class WhisperCliTranscriber:
@@ -79,9 +157,11 @@ class WhisperCliTranscriber:
         *,
         transcript_hint: str,
         config: WhisperConfig,
+        progress_callback: ProgressCallback | None = None,
     ) -> list[TimedWord]:
-        executable = shutil.which(config.executable)
-        if not executable:
+        report_progress(progress_callback, 0.0, "Whisper đang phân tích voice…")
+        executable = resolve_executable(config.executable)
+        if not Path(executable).is_file() and not shutil.which(executable):
             raise TranscriptionError(
                 "Không tìm thấy Whisper CLI. Cài bằng: pip install openai-whisper"
             )
@@ -122,6 +202,7 @@ class WhisperCliTranscriber:
                     encoding="utf-8",
                     errors="replace",
                     env=environment,
+                    **hidden_subprocess_kwargs(),
                 )
             except subprocess.CalledProcessError as error:
                 detail = (error.stderr or error.stdout or "Whisper thất bại").strip()
@@ -137,6 +218,7 @@ class WhisperCliTranscriber:
         words = _words_from_whisper(payload)
         if not words:
             raise TranscriptionError("Whisper không nhận diện được từ nào trong audio")
+        report_progress(progress_callback, 1.0, "Whisper đã lấy xong timestamp")
         return words
 
 
@@ -394,3 +476,9 @@ def _normalize_language(language: str) -> str:
     }
     normalized = language.strip().lower().replace("_", "-")
     return aliases.get(normalized, normalized.split("-", 1)[0])
+
+
+def _whisper_cache_dir() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    root = Path(local_app_data) if local_app_data else Path.home() / ".cache"
+    return root / "SyncVideo-Audio" / "models"

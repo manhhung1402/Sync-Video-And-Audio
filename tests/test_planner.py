@@ -36,6 +36,7 @@ class FakeTranscriber:
         *,
         transcript_hint: str,
         config: WhisperConfig,
+        progress_callback=None,
     ) -> list[TimedWord]:
         self.calls.append((audio_path, transcript_hint, config))
         return self.words

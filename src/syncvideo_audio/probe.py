@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .manifest import seconds_to_us
+from .runtime import hidden_subprocess_kwargs, resolve_executable
 
 
 class ProbeError(RuntimeError):
@@ -35,8 +36,9 @@ class FfprobeMediaProbe:
         source = Path(path)
         if not source.is_file():
             raise ProbeError(f"media file does not exist: {source}")
+        executable = resolve_executable(self.executable)
         command = [
-            self.executable,
+            executable,
             "-v",
             "error",
             "-print_format",
@@ -46,9 +48,15 @@ class FfprobeMediaProbe:
             str(source),
         ]
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=True,
+                **hidden_subprocess_kwargs(),
+            )
         except FileNotFoundError as error:
-            raise ProbeError(f"ffprobe executable was not found: {self.executable}") from error
+            raise ProbeError(f"ffprobe executable was not found: {executable}") from error
         except subprocess.CalledProcessError as error:
             detail = (error.stderr or "").strip()
             raise ProbeError(f"ffprobe failed for {source}: {detail}") from error
@@ -75,4 +83,3 @@ def _optional_int(stream: object, key: str) -> int | None:
     if not isinstance(stream, dict) or stream.get(key) is None:
         return None
     return int(stream[key])
-

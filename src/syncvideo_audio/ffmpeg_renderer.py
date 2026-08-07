@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Sequence
 
 from .manifest import MediaType, MotionPreset, TimelineClip, TimelineProject, us_to_seconds
+from .runtime import (
+    ProgressCallback,
+    hidden_subprocess_kwargs,
+    report_progress,
+    resolve_executable,
+    resource_path,
+)
 
 
 class RenderError(RuntimeError):
@@ -40,6 +47,8 @@ class FfmpegRenderer:
         destination: str | Path,
         *,
         overwrite: bool = False,
+        burn_captions: bool = False,
+        progress_callback: ProgressCallback | None = None,
     ) -> Path:
         output = Path(destination).resolve()
         if output.exists() and not overwrite:
@@ -52,15 +61,28 @@ class FfmpegRenderer:
             temporary = Path(temporary_name)
             normalized: list[Path] = []
             for index, clip in enumerate(project.clips):
+                report_progress(
+                    progress_callback,
+                    0.05 + 0.68 * index / len(project.clips),
+                    f"Đang render media {index + 1}/{len(project.clips)}…",
+                )
                 clip_output = temporary / f"clip-{index:05d}.mp4"
                 frame_count = _timeline_frame_count(project, clip, index == len(project.clips) - 1)
                 self._render_clip(project, clip, clip_output, frame_count)
                 normalized.append(clip_output)
             visual = temporary / "visual.mp4"
+            report_progress(progress_callback, 0.76, "Đang ghép các đoạn hình…")
             self._concat(normalized, visual, temporary / "concat.txt")
+            if burn_captions and project.captions:
+                captioned = temporary / "captioned.mp4"
+                report_progress(progress_callback, 0.84, "Đang burn caption vào MP4…")
+                self._burn_captions(project, visual, captioned, temporary / "captions.ass")
+                visual = captioned
             final = temporary / "final.mp4"
+            report_progress(progress_callback, 0.94, "Đang ghép audio vào MP4…")
             self._merge_audio(project, visual, final)
             os.replace(final, output)
+        report_progress(progress_callback, 1.0, "Đã tạo xong MP4 preview")
         return output
 
     def _render_clip(
@@ -70,9 +92,10 @@ class FfmpegRenderer:
         output: Path,
         frame_count: int,
     ) -> None:
+        ffmpeg = resolve_executable(self.config.ffmpeg)
         if clip.media_type is MediaType.IMAGE:
             command = [
-                self.config.ffmpeg, "-y", "-loglevel", "error",
+                ffmpeg, "-y", "-loglevel", "error",
                 "-loop", "1", "-framerate", str(project.canvas.fps),
                 "-i", str(clip.path),
                 "-an", "-vf", build_image_filter(project, clip),
@@ -82,7 +105,7 @@ class FfmpegRenderer:
         else:
             source_duration = clip.source_duration_us or round(clip.duration_us * clip.speed)
             command = [
-                self.config.ffmpeg, "-y", "-loglevel", "error",
+                ffmpeg, "-y", "-loglevel", "error",
                 "-ss", f"{us_to_seconds(clip.source_start_us):.6f}",
                 "-t", f"{us_to_seconds(source_duration):.6f}",
                 "-i", str(clip.path), "-an",
@@ -96,18 +119,44 @@ class FfmpegRenderer:
         lines = [f"file '{_concat_escape(path.resolve())}'" for path in clips]
         list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
         self._run([
-            self.config.ffmpeg, "-y", "-loglevel", "error",
+            resolve_executable(self.config.ffmpeg), "-y", "-loglevel", "error",
             "-f", "concat", "-safe", "0", "-i", str(list_file),
             "-c", "copy", str(output),
         ])
 
     def _merge_audio(self, project: TimelineProject, visual: Path, output: Path) -> None:
         self._run([
-            self.config.ffmpeg, "-y", "-loglevel", "error",
+            resolve_executable(self.config.ffmpeg), "-y", "-loglevel", "error",
             "-i", str(visual), "-i", str(project.audio.path),
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "copy", "-c:a", "aac", "-b:a", self.config.audio_bitrate,
             "-t", f"{us_to_seconds(project.duration_us):.6f}", "-shortest", str(output),
+        ])
+
+    def _burn_captions(
+        self,
+        project: TimelineProject,
+        visual: Path,
+        output: Path,
+        subtitle_file: Path,
+    ) -> None:
+        subtitle_file.write_text(build_ass_subtitles(project), encoding="utf-8")
+        fonts_dir = resource_path("assets/fonts")
+        subtitle_filter = f"ass=filename='{_ffmpeg_filter_path(subtitle_file)}'"
+        if fonts_dir.is_dir():
+            subtitle_filter += f":fontsdir='{_ffmpeg_filter_path(fonts_dir)}'"
+        self._run([
+            resolve_executable(self.config.ffmpeg),
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(visual),
+            "-an",
+            "-vf",
+            subtitle_filter,
+            *self._video_encoder(),
+            str(output),
         ])
 
     def _video_encoder(self) -> list[str]:
@@ -119,7 +168,13 @@ class FfmpegRenderer:
     @staticmethod
     def _run(command: Sequence[str]) -> None:
         try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                **hidden_subprocess_kwargs(),
+            )
         except FileNotFoundError as error:
             raise RenderError(f"FFmpeg executable was not found: {command[0]}") from error
         except subprocess.CalledProcessError as error:
@@ -200,6 +255,52 @@ def _concat_escape(path: Path) -> str:
     return path.as_posix().replace("'", "'\\''")
 
 
+def build_ass_subtitles(project: TimelineProject) -> str:
+    """Create a styled ASS track for hard-burning captions into the MP4 preview."""
+
+    font_size = max(24, round(project.canvas.height * 42 / 1080))
+    events = [
+        f"Dialogue: 0,{_ass_timestamp(caption.start_us)},{_ass_timestamp(caption.end_us)},"
+        f"Default,,0,0,0,,{_ass_escape(caption.text)}"
+        for caption in project.captions
+    ]
+    return "\n".join([
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {project.canvas.width}",
+        f"PlayResY: {project.canvas.height}",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,Noto Sans CJK SC,{font_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H80101010,"
+        "-1,0,0,0,100,100,0,0,1,3,1,2,60,60,70,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        *events,
+        "",
+    ])
+
+
+def _ass_timestamp(value_us: int) -> str:
+    centiseconds = max(0, round(value_us / 10_000))
+    hours, remainder = divmod(centiseconds, 360_000)
+    minutes, remainder = divmod(remainder, 6_000)
+    seconds, centis = divmod(remainder, 100)
+    return f"{hours}:{minutes:02d}:{seconds:02d}.{centis:02d}"
+
+
+def _ass_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\r\n", "\\N").replace("\n", "\\N")
+
+
+def _ffmpeg_filter_path(path: Path) -> str:
+    return path.resolve().as_posix().replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
 def _timeline_frame_count(
     project: TimelineProject,
     clip: TimelineClip,
@@ -215,4 +316,5 @@ def _timeline_frame_count(
 
 
 def ffmpeg_available(executable: str = "ffmpeg") -> bool:
-    return shutil.which(executable) is not None
+    resolved = resolve_executable(executable)
+    return Path(resolved).is_file() or shutil.which(resolved) is not None
