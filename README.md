@@ -207,7 +207,7 @@ assets/tools/ffprobe.exe
 The generated files are:
 
 - `dist-full/SyncVideo-Audio/` — portable onedir payload;
-- `dist-installer/SyncVideo-Audio-Setup-0.1.0.exe` — customer installer.
+- `dist-installer/SyncVideo-Audio-Setup-<version>.exe` — customer installer.
 
 The large model and executable assets are intentionally ignored by Git. Keep them in the release/build environment and publish checksums for downloadable binaries.
 
@@ -218,7 +218,7 @@ Before publishing a GitHub release:
 1. Run `python -m pytest` and `git diff --check`.
 2. Build `dist-full/SyncVideo-Audio/` and smoke-test the EXE on a clean Windows account.
 3. Build `dist-installer/SyncVideo-Audio-Setup-<version>.exe` with Inno Setup.
-4. Create an annotated tag such as `v0.1.0` and upload the installer as a release asset.
+4. Create an annotated tag such as `v0.1.1` and upload the installer as a release asset.
 5. Publish SHA-256 checksums for the installer and portable payload.
 
 Release notes should state the supported CapCut version, included Whisper model, FFmpeg build/license configuration and any known schema limitations.

@@ -1,0 +1,21 @@
+FFmpeg binary notice
+=====================
+
+The full installer contains FFmpeg 7.1 essentials binaries from the
+gyan.dev Windows build (ffmpeg.exe and ffprobe.exe).
+
+This build reports --enable-gpl and --enable-version3 in its configuration.
+Consequently, the GPL terms apply to this FFmpeg build in addition to the
+LGPL/GPL notices of the individual FFmpeg components. The SyncVideo-Audio
+Python source code is not linked against FFmpeg libraries; it invokes the
+standalone executables as subprocesses.
+
+Official sources and license information:
+
+- https://ffmpeg.org/legal.html
+- https://ffmpeg.org/doxygen/trunk/md_LICENSE.html
+- https://www.gyan.dev/ffmpeg/builds/
+- https://github.com/FFmpeg/FFmpeg
+
+The exact executable hashes for each release are published in the release
+SHA256SUMS.txt asset.

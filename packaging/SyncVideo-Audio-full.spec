@@ -6,9 +6,14 @@ datas = [
     ("../assets/logo-64.png", "assets"),
     ("../assets/logo.ico", "assets"),
     ("../assets/fonts/NotoSansCJK-Regular.ttc", "assets/fonts"),
+    ("../assets/fonts/OFL-1.1.txt", "licenses"),
     ("../assets/models/small", "assets/models/small"),
     ("../assets/tools/ffmpeg.exe", "assets/tools"),
     ("../assets/tools/ffprobe.exe", "assets/tools"),
+    ("../LICENSE", "licenses"),
+    ("../THIRD_PARTY_NOTICES.md", "licenses"),
+    ("licenses/FFmpeg-NOTICE.txt", "licenses"),
+    ("licenses/WHISPER-MODEL-NOTICE.txt", "licenses"),
 ]
 a = Analysis(
     ["gui_launcher.py"],

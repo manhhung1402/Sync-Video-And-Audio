@@ -4,16 +4,16 @@ The SyncVideo-Audio source code and project-created logo assets are released und
 
 ## FFmpeg and FFprobe
 
-The bundled `ffmpeg.exe` and `ffprobe.exe` are FFmpeg project binaries. FFmpeg is generally licensed under LGPL-2.1-or-later; builds containing optional GPL components may be subject to GPL-2.0-or-later obligations. See the official guidance:
+The bundled `ffmpeg.exe` and `ffprobe.exe` are FFmpeg 7.1 essentials binaries from the gyan.dev Windows build. This exact build reports `--enable-gpl` and `--enable-version3`, so the GPL terms apply to the FFmpeg build in addition to the LGPL/GPL notices of individual components. The application invokes the standalone executables and does not link to FFmpeg libraries.
 
 - <https://ffmpeg.org/legal.html>
 - <https://ffmpeg.org/doxygen/trunk/md_LICENSE.html>
 
-The exact binary build configuration should be recorded with each public release.
+The installer includes `licenses/FFmpeg-NOTICE.txt`; each public release must also publish the executable SHA-256 values.
 
 ## Noto Sans CJK
 
-`assets/fonts/NotoSansCJK-Regular.ttc` is from the Noto CJK project and is distributed under the SIL Open Font License 1.1:
+`assets/fonts/NotoSansCJK-Regular.ttc` is from the Noto CJK project and is distributed under the SIL Open Font License 1.1. The full license text is included as `assets/fonts/OFL-1.1.txt` in source and as `licenses/OFL-1.1.txt` in the installer:
 
 - <https://github.com/notofonts/noto-cjk>
 - <https://openfontlicense.org/>
@@ -29,7 +29,7 @@ Both upstream projects provide their own license files. Their dependencies may h
 
 ## Whisper small model
 
-The optional/bundled `assets/models/small` directory is a CTranslate2 conversion of `openai/whisper-small`. The model card identifies it as MIT-licensed and links to the original model:
+The optional/bundled `assets/models/small` directory is a CTranslate2 conversion of `openai/whisper-small`. The model card identifies it as MIT-licensed and links to the original model. The installer includes `licenses/WHISPER-MODEL-NOTICE.txt`:
 
 - <https://huggingface.co/Systran/faster-whisper-small>
 - <https://huggingface.co/openai/whisper-small>
