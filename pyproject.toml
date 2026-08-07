@@ -20,6 +20,9 @@ dev = [
 [project.scripts]
 syncvideo-audio = "syncvideo_audio.cli:main"
 
+[project.gui-scripts]
+syncvideo-audio-gui = "syncvideo_audio.gui:launch"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -27,4 +30,3 @@ where = ["src"]
 addopts = "-q"
 testpaths = ["tests"]
 pythonpath = ["src"]
-

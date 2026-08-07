@@ -40,6 +40,24 @@ def test_sort_media_uses_numeric_prefix_then_alphabetic(tmp_path: Path) -> None:
     ]
 
 
+def test_manual_media_order_is_preserved(tmp_path: Path) -> None:
+    audio = touch(tmp_path / "audio.wav")
+    media = tmp_path / "media"
+    media.mkdir()
+    first = touch(media / "img-001.png")
+    second = touch(media / "img-002.png")
+
+    project = build_timeline(
+        project_name="manual-order",
+        audio_path=audio,
+        media_dir=media,
+        ordered_media_paths=[second, first],
+        probe=FakeProbe({"audio.wav": 2}),
+    )
+
+    assert [clip.path for clip in project.clips] == [second.resolve(), first.resolve()]
+
+
 def test_planner_without_mapping_fills_audio_and_expands_long_stills(tmp_path: Path) -> None:
     audio = touch(tmp_path / "narration.wav")
     media = tmp_path / "media"

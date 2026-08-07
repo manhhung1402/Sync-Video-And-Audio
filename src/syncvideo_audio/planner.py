@@ -147,6 +147,7 @@ def build_timeline(
     audio_path: str | Path,
     media_dir: str | Path,
     mapping_path: str | Path | None = None,
+    ordered_media_paths: Sequence[str | Path] | None = None,
     config: PlannerConfig | None = None,
     probe: MediaProbe | None = None,
 ) -> TimelineProject:
@@ -161,10 +162,16 @@ def build_timeline(
     if audio_duration_us <= 0:
         raise ValueError("audio duration must be positive")
 
+    if mapping_path and ordered_media_paths is not None:
+        raise ValueError("manual media order cannot be combined with a scene mapping")
     if mapping_path:
         scenes = load_scene_mapping(mapping_path, media_dir, audio_duration_us)
     else:
-        media = sort_media(media_dir)
+        media = (
+            _validate_ordered_media(ordered_media_paths, media_dir)
+            if ordered_media_paths is not None
+            else sort_media(media_dir)
+        )
         ranges = _weighted_ranges(audio_duration_us, [1] * len(media))
         scenes = [
             SceneSpec(path.resolve(), start, end - start, scene_index=index + 1)
@@ -196,6 +203,27 @@ def build_timeline(
     )
     _validate_contiguous(project.clips, project.duration_us)
     return project
+
+
+def _validate_ordered_media(
+    values: Sequence[str | Path], media_dir: str | Path
+) -> list[Path]:
+    if not values:
+        raise ValueError("manual media order cannot be empty")
+    root = Path(media_dir).resolve()
+    media: list[Path] = []
+    seen: set[Path] = set()
+    for value in values:
+        path = Path(value).resolve()
+        if not (path == root or root in path.parents):
+            raise ValueError(f"ordered media is outside the media directory: {path}")
+        if not path.is_file() or path.suffix.lower() not in MEDIA_EXTENSIONS:
+            raise FileNotFoundError(f"ordered media is missing or unsupported: {path}")
+        if path in seen:
+            raise ValueError(f"ordered media contains a duplicate: {path}")
+        seen.add(path)
+        media.append(path)
+    return media
 
 
 def _plan_image(scene: SceneSpec, config: PlannerConfig, motion_index: int) -> list[TimelineClip]:
