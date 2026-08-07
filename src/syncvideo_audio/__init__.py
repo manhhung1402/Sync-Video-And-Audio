@@ -1,6 +1,7 @@
 """SyncVideo-Audio core package."""
 
 from .capcut_exporter import CapCutDraftExporter, CapCutExportError, CapCutExportResult
+from .capcut_keyframes import MotionSettings, apply_motion_keyframes
 
 from .manifest import (
     AudioTrack,
@@ -24,6 +25,7 @@ __all__ = [
     "CanvasSpec",
     "MediaType",
     "MotionPreset",
+    "MotionSettings",
     "TimelineCaption",
     "TimelineClip",
     "TimelineProject",
@@ -35,6 +37,7 @@ __all__ = [
     "ProbeError",
     "SceneSpec",
     "build_timeline",
+    "apply_motion_keyframes",
     "load_scene_mapping",
     "sort_media",
 ]

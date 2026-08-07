@@ -9,6 +9,7 @@ from syncvideo_audio import (
     CapCutDraftExporter,
     MediaInfo,
     MediaType,
+    MotionPreset,
     TimelineClip,
     TimelineProject,
 )
@@ -33,7 +34,7 @@ def make_project(tmp_path: Path) -> TimelineProject:
         canvas=CanvasSpec(1080, 1920, 30),
         audio=AudioTrack(audio, 5_000_000, 0.9),
         clips=[
-            TimelineClip(MediaType.IMAGE, image, 0, 2_000_000),
+            TimelineClip(MediaType.IMAGE, image, 0, 2_000_000, motion=MotionPreset.ZOOM_IN),
             TimelineClip(
                 MediaType.VIDEO,
                 video,
@@ -90,7 +91,10 @@ def test_content_has_editable_tracks_and_resolved_materials(tmp_path: Path) -> N
     assert content["duration"] == 5_000_000
     assert [track["type"] for track in content["tracks"]] == ["video", "audio"]
     assert [item["type"] for item in content["materials"]["videos"]] == ["photo", "video"]
-    assert all(segment["common_keyframes"] == [] for track in content["tracks"] for segment in track["segments"])
+    video_segments = content["tracks"][0]["segments"]
+    assert video_segments[0]["common_keyframes"][0]["property_type"] == "KFTypeScaleX"
+    assert video_segments[1]["common_keyframes"] == []
+    assert content["tracks"][1]["segments"][0]["common_keyframes"] == []
 
     ids = {
         item["id"]

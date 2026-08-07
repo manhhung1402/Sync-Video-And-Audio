@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .capcut_keyframes import MotionSettings, apply_motion_keyframes
 from .capcut_schema import (
     add_audio,
     add_visual_clip,
@@ -36,8 +37,13 @@ class CapCutExportResult:
 
 
 class CapCutDraftExporter:
-    def __init__(self, probe: MediaProbe | None = None) -> None:
+    def __init__(
+        self,
+        probe: MediaProbe | None = None,
+        motion_settings: MotionSettings = MotionSettings(),
+    ) -> None:
         self.probe = probe or FfprobeMediaProbe()
+        self.motion_settings = motion_settings
 
     def export(
         self,
@@ -120,7 +126,14 @@ class CapCutDraftExporter:
         for clip in project.clips:
             source = clip.path.resolve()
             info = self._visual_info(clip.media_type, source, project)
-            visual_segments.append(add_visual_clip(content, clip, asset_paths[source], info))
+            segment = add_visual_clip(content, clip, asset_paths[source], info)
+            apply_motion_keyframes(
+                segment,
+                clip.motion,
+                clip.duration_us,
+                self.motion_settings,
+            )
+            visual_segments.append(segment)
         if visual_segments:
             content["tracks"].append(make_track("video", visual_segments))
         audio_segment = add_audio(content, project, asset_paths[project.audio.path.resolve()])
