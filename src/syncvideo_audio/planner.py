@@ -11,6 +11,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -25,6 +26,13 @@ from .manifest import (
     seconds_to_us,
 )
 from .probe import FfprobeMediaProbe, MediaProbe
+from .transcription import (
+    AudioTranscriber,
+    WhisperCliTranscriber,
+    WhisperConfig,
+    align_transcript_lines,
+    load_transcript,
+)
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
@@ -39,6 +47,11 @@ MOTION_CYCLE = (
     MotionPreset.PAN_TOP_BOTTOM,
     MotionPreset.PAN_BOTTOM_TOP,
 )
+
+
+class AlignmentMode(str, Enum):
+    EQUAL = "equal"
+    TRANSCRIPT = "transcript"
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +161,10 @@ def build_timeline(
     media_dir: str | Path,
     mapping_path: str | Path | None = None,
     ordered_media_paths: Sequence[str | Path] | None = None,
+    alignment_mode: AlignmentMode = AlignmentMode.EQUAL,
+    transcript_path: str | Path | None = None,
+    transcriber: AudioTranscriber | None = None,
+    whisper_config: WhisperConfig | None = None,
     config: PlannerConfig | None = None,
     probe: MediaProbe | None = None,
 ) -> TimelineProject:
@@ -162,8 +179,11 @@ def build_timeline(
     if audio_duration_us <= 0:
         raise ValueError("audio duration must be positive")
 
-    if mapping_path and ordered_media_paths is not None:
+    mode = AlignmentMode(alignment_mode)
+    if mapping_path and (ordered_media_paths is not None or transcript_path is not None):
         raise ValueError("manual media order cannot be combined with a scene mapping")
+    if mapping_path and mode is AlignmentMode.TRANSCRIPT:
+        raise ValueError("scene mapping cannot be combined with transcript alignment")
     if mapping_path:
         scenes = load_scene_mapping(mapping_path, media_dir, audio_duration_us)
     else:
@@ -172,11 +192,43 @@ def build_timeline(
             if ordered_media_paths is not None
             else sort_media(media_dir)
         )
-        ranges = _weighted_ranges(audio_duration_us, [1] * len(media))
-        scenes = [
-            SceneSpec(path.resolve(), start, end - start, scene_index=index + 1)
-            for index, (path, (start, end)) in enumerate(zip(media, ranges, strict=True))
-        ]
+        if mode is AlignmentMode.TRANSCRIPT:
+            if transcript_path is None:
+                raise ValueError("transcript mode requires a transcript file")
+            transcript_lines = load_transcript(transcript_path)
+            if len(transcript_lines) != len(media):
+                raise ValueError(
+                    f"transcript có {len(transcript_lines)} câu nhưng media có {len(media)} file; "
+                    "cần đúng một dòng/câu cho mỗi file theo thứ tự đánh số"
+                )
+            timestamp_words = (transcriber or WhisperCliTranscriber()).transcribe(
+                audio,
+                transcript_hint="\n".join(transcript_lines),
+                config=whisper_config or WhisperConfig(),
+            )
+            aligned_lines = align_transcript_lines(
+                transcript_lines,
+                timestamp_words,
+                audio_duration_us,
+            )
+            scenes = [
+                SceneSpec(
+                    path.resolve(),
+                    line.start_us,
+                    line.duration_us,
+                    text=line.text,
+                    scene_index=index + 1,
+                )
+                for index, (path, line) in enumerate(zip(media, aligned_lines, strict=True))
+            ]
+        else:
+            if transcript_path is not None:
+                raise ValueError("transcript file is only valid in transcript alignment mode")
+            ranges = _weighted_ranges(audio_duration_us, [1] * len(media))
+            scenes = [
+                SceneSpec(path.resolve(), start, end - start, scene_index=index + 1)
+                for index, (path, (start, end)) in enumerate(zip(media, ranges, strict=True))
+            ]
 
     clips: list[TimelineClip] = []
     captions: list[TimelineCaption] = []

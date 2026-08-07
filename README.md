@@ -10,12 +10,13 @@ schema quan sát từ **CapCut International 9.1.0**.
 
 ## Chức năng
 
+- Hai chế độ đồng bộ: chia đều hoặc căn chuẩn theo transcript + Whisper timestamp.
 - Tự xếp file có prefix `img-001`, `vid-002`, ...; file không có số đứng sau.
 - Cho phép đổi thứ tự thủ công trong GUI.
 - Căn đều theo độ dài audio hoặc nhận `mapping.json` có timestamp từng cảnh.
 - Ảnh dài tự tách thành các shot (mặc định 6 giây).
 - Video tự trim, đổi speed hoặc lặp bằng các segment vẫn chỉnh được.
-- Sáu preset keyframe CapCut nhẹ: zoom in/out, pan ngang/dọc hai chiều.
+- Sáu preset keyframe CapCut nhẹ cho cả ảnh và video: zoom in/out, pan ngang/dọc hai chiều.
 - Ba mode output: `mp4`, `capcut`, `both`.
 - Luôn lưu `*.timeline.json` làm hợp đồng hand-off có thể export lại.
 - Copy asset vào project CapCut để tránh mất link khi di chuyển source.
@@ -25,13 +26,14 @@ schema quan sát từ **CapCut International 9.1.0**.
 
 - Windows 10/11, Python 3.10 trở lên.
 - `ffmpeg` và `ffprobe` có trong `PATH`.
+- Chế độ căn transcript cần OpenAI Whisper CLI: `pip install openai-whisper`.
 - CapCut International 9.1 được khuyến nghị cho native draft.
 
 ## Cài và chạy GUI
 
 ```powershell
 cd G:\GitHub\SyncVideo-Audio
-python -m pip install -e .
+python -m pip install -e ".[transcribe]"
 syncvideo-audio-gui
 ```
 
@@ -42,6 +44,32 @@ Trong GUI:
 3. Chọn `both` để nhận cả MP4 và CapCut project.
 4. Đóng project đang mở trong CapCut rồi bấm **Tạo hand-off**.
 
+## Hai chế độ đồng bộ
+
+### 1. Chia đều theo audio
+
+Giữ hành vi nhanh hiện tại: toàn bộ duration audio được chia đều cho media theo
+thứ tự `001 → 002 → 003…`. Chế độ này không cần transcript hoặc Whisper.
+
+### 2. Căn chuẩn theo transcript
+
+Đầu vào gồm audio, transcript và thư mục media. Mỗi dòng/câu transcript tương
+ứng đúng một media theo số thứ tự:
+
+```text
+Dòng 1  → img/vid-001
+Dòng 2  → img/vid-002
+Dòng 3  → img/vid-003
+```
+
+Whisper chạy local để lấy timestamp từng từ. Tool căn các dòng transcript chuẩn
+vào timestamp đó, giữ cả khoảng nghỉ giữa câu, rồi dựng timeline. Không phân
+tích nội dung ảnh/video và không tự đổi thứ tự media.
+
+Transcript hỗ trợ `.txt`, `.srt`, `.json`. Với TXT, nên để đúng một câu trên
+mỗi dòng. Số dòng/câu phải bằng số media; tool sẽ báo lỗi thay vì ghép sai khi
+hai số lượng lệch nhau. Lần chạy Whisper đầu tiên sẽ tải model về cache.
+
 ## CLI
 
 Tạo mới từ audio và thư mục media:
@@ -51,6 +79,21 @@ syncvideo-audio build `
   --audio "D:\Job\voice.wav" `
   --media-dir "D:\Job\media" `
   --name "Video 001" `
+  --mode both `
+  --output-dir "D:\Job\output"
+```
+
+Căn chuẩn theo transcript:
+
+```powershell
+syncvideo-audio build `
+  --audio "D:\Job\voice.wav" `
+  --media-dir "D:\Job\media" `
+  --name "Video 001" `
+  --sync-mode transcript `
+  --transcript "D:\Job\voice.txt" `
+  --whisper-model small `
+  --language vi `
   --mode both `
   --output-dir "D:\Job\output"
 ```
@@ -73,6 +116,9 @@ syncvideo-audio export "D:\Job\output\Video 001.timeline.json" `
 Các option hữu ích:
 
 - `--mapping scenes.json`: dùng scene map thay vì chia đều.
+- `--sync-mode equal|transcript`: chọn cách căn timeline.
+- `--transcript voice.txt`: transcript chuẩn, một dòng/câu cho mỗi media.
+- `--whisper-model tiny|base|small|medium|large`: model timestamp local.
 - `--width`, `--height`, `--fps`: cấu hình canvas.
 - `--image-duration 6`: số giây tối đa mỗi shot ảnh.
 - `--no-motion`: không tạo motion/keyframe.

@@ -13,7 +13,8 @@ from tkinter import filedialog, messagebox, ttk
 from .capcut_registry import CapCutRegistry
 from .manifest import CanvasSpec, seconds_to_us
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
-from .planner import PlannerConfig, build_timeline, sort_media
+from .planner import AlignmentMode, PlannerConfig, build_timeline, sort_media
+from .transcription import WhisperConfig
 
 
 COLORS = {
@@ -46,6 +47,11 @@ MEDIA_TYPE_LABELS = {
     ".webp": "ẢNH",
     ".bmp": "ẢNH",
     ".gif": "ẢNH",
+}
+
+ALIGNMENT_OPTIONS = {
+    "Chia đều theo audio": AlignmentMode.EQUAL,
+    "Căn chuẩn theo transcript": AlignmentMode.TRANSCRIPT,
 }
 
 
@@ -273,7 +279,8 @@ class SyncVideoAudioApp(ttk.Frame):
         self.name_var = tk.StringVar(value="Video mới")
         self.audio_var = tk.StringVar()
         self.media_dir_var = tk.StringVar()
-        self.mapping_var = tk.StringVar()
+        self.transcript_var = tk.StringVar()
+        self.alignment_var = tk.StringVar(value=next(iter(ALIGNMENT_OPTIONS)))
         self.output_var = tk.StringVar(value=str((Path.cwd() / "output").resolve()))
         self.draft_root_var = tk.StringVar()
         self.mode_var = tk.StringVar(value=OutputMode.BOTH.value)
@@ -346,11 +353,26 @@ class SyncVideoAudioApp(ttk.Frame):
         ttk.Separator(card, style="Dark.TSeparator").grid(row=2, column=0, sticky="ew")
 
         self._field(card, 3, "TÊN PROJECT", self.name_var)
-        self._field(card, 4, "AUDIO THUYẾT MINH", self.audio_var, self._choose_audio)
-        self._field(card, 5, "THƯ MỤC ẢNH / VIDEO", self.media_dir_var, self._choose_media_dir)
-        self._field(card, 6, "SCENE MAPPING  ·  TUỲ CHỌN", self.mapping_var, self._choose_mapping)
-        self._field(card, 7, "THƯ MỤC OUTPUT", self.output_var, self._choose_output)
-        self._field(card, 8, "CAPCUT DRAFT ROOT", self.draft_root_var, self._choose_draft_root)
+        self._choice_field(
+            card,
+            4,
+            "CHẾ ĐỘ ĐỒNG BỘ",
+            self.alignment_var,
+            list(ALIGNMENT_OPTIONS),
+            self._alignment_changed,
+        )
+        self._field(card, 5, "AUDIO THUYẾT MINH", self.audio_var, self._choose_audio)
+        self.transcript_entry, self.transcript_button = self._field(
+            card,
+            6,
+            "TRANSCRIPT  ·  MỘT DÒNG = MỘT MEDIA",
+            self.transcript_var,
+            self._choose_transcript,
+        )
+        self._field(card, 7, "THƯ MỤC ẢNH / VIDEO", self.media_dir_var, self._choose_media_dir)
+        self._field(card, 8, "THƯ MỤC OUTPUT", self.output_var, self._choose_output)
+        self._field(card, 9, "CAPCUT DRAFT ROOT", self.draft_root_var, self._choose_draft_root)
+        self._alignment_changed()
 
     def _build_media_card(self) -> None:
         card = self._card(1, 1, padx=(9, 0))
@@ -368,7 +390,7 @@ class SyncVideoAudioApp(ttk.Frame):
         )
         ttk.Label(
             card,
-            text="Chọn một hàng rồi di chuyển. Scene mapping sẽ ghi đè thứ tự này.",
+            text="Chọn một hàng rồi di chuyển. Cả hai chế độ đều giữ đúng thứ tự này.",
             style="CardMuted.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(3, 13))
         ttk.Separator(card, style="Dark.TSeparator").grid(row=2, column=0, sticky="ew")
@@ -465,7 +487,7 @@ class SyncVideoAudioApp(ttk.Frame):
         checks.grid(row=4, column=0, columnspan=6, sticky="ew", pady=(13, 0))
         ttk.Checkbutton(
             checks,
-            text="Motion keyframe nhẹ",
+            text="Motion keyframe nhẹ · zoom + pan · áp dụng cả video",
             variable=self.motion_var,
             style="Dark.TCheckbutton",
         ).grid(row=0, column=0, sticky="w")
@@ -546,21 +568,49 @@ class SyncVideoAudioApp(ttk.Frame):
         label: str,
         variable: tk.StringVar,
         command=None,
-    ) -> None:
+    ) -> tuple[ttk.Entry, ttk.Button | None]:
         wrapper = ttk.Frame(parent, style="CardInner.TFrame")
         wrapper.grid(row=row, column=0, sticky="ew", pady=(7, 0))
         wrapper.columnconfigure(0, weight=1)
         ttk.Label(wrapper, text=label, style="Field.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 3)
         )
-        ttk.Entry(wrapper, textvariable=variable).grid(row=1, column=0, sticky="ew")
+        entry = ttk.Entry(wrapper, textvariable=variable)
+        entry.grid(row=1, column=0, sticky="ew")
+        button: ttk.Button | None = None
         if command:
-            ttk.Button(
+            button = ttk.Button(
                 wrapper,
                 text="Chọn…",
                 style="Secondary.TButton",
                 command=command,
-            ).grid(row=1, column=1, padx=(8, 0))
+            )
+            button.grid(row=1, column=1, padx=(8, 0))
+        return entry, button
+
+    def _choice_field(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        label: str,
+        variable: tk.StringVar,
+        values: list[str],
+        command,
+    ) -> None:
+        wrapper = ttk.Frame(parent, style="CardInner.TFrame")
+        wrapper.grid(row=row, column=0, sticky="ew", pady=(7, 0))
+        wrapper.columnconfigure(0, weight=1)
+        ttk.Label(wrapper, text=label, style="Field.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 3)
+        )
+        combo = ttk.Combobox(
+            wrapper,
+            textvariable=variable,
+            values=values,
+            state="readonly",
+        )
+        combo.grid(row=1, column=0, sticky="ew")
+        combo.bind("<<ComboboxSelected>>", lambda _event: command())
 
     def _choose_audio(self) -> None:
         value = filedialog.askopenfilename(
@@ -576,13 +626,25 @@ class SyncVideoAudioApp(ttk.Frame):
             self.media_dir_var.set(value)
             self._reload_media()
 
-    def _choose_mapping(self) -> None:
+    def _choose_transcript(self) -> None:
         value = filedialog.askopenfilename(
-            title="Chọn scene mapping",
-            filetypes=[("JSON", "*.json"), ("Tất cả", "*.*")],
+            title="Chọn transcript của voice",
+            filetypes=[
+                ("Transcript", "*.txt *.srt *.json"),
+                ("Text", "*.txt"),
+                ("Subtitle", "*.srt"),
+                ("JSON", "*.json"),
+                ("Tất cả", "*.*"),
+            ],
         )
         if value:
-            self.mapping_var.set(value)
+            self.transcript_var.set(value)
+
+    def _alignment_changed(self) -> None:
+        enabled = ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT
+        self.transcript_entry.configure(state="normal" if enabled else "disabled")
+        if self.transcript_button:
+            self.transcript_button.configure(state="normal" if enabled else "disabled")
 
     def _choose_output(self) -> None:
         value = filedialog.askdirectory(title="Chọn thư mục output")
@@ -644,11 +706,13 @@ class SyncVideoAudioApp(ttk.Frame):
         except (OSError, ValueError):
             pass
         ffmpeg_ready = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
-        if capcut_ready and ffmpeg_ready:
-            self.runtime_var.set("●  CapCut + FFmpeg sẵn sàng")
+        whisper_ready = shutil.which("whisper") is not None
+        if capcut_ready and ffmpeg_ready and whisper_ready:
+            self.runtime_var.set("●  CapCut + FFmpeg + Whisper")
             self.runtime_badge.configure(style="Badge.TLabel")
         elif capcut_ready:
-            self.runtime_var.set("!  Thiếu FFmpeg")
+            missing = "Whisper" if ffmpeg_ready else "FFmpeg"
+            self.runtime_var.set(f"!  Thiếu {missing}")
             self.runtime_badge.configure(style="WarningBadge.TLabel")
         else:
             self.runtime_var.set("!  Chưa phát hiện CapCut")
@@ -663,7 +727,10 @@ class SyncVideoAudioApp(ttk.Frame):
         self.build_button.configure(state="disabled", text="Đang xử lý…")
         self.progress.grid()
         self.progress.start(12)
-        self.status_var.set("Đang lập timeline và tạo output…")
+        if ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT:
+            self.status_var.set("Whisper đang lấy timestamp và căn transcript…")
+        else:
+            self.status_var.set("Đang lập timeline và tạo output…")
         threading.Thread(target=self._worker, args=(request,), daemon=True).start()
 
     def _collect_request(self) -> dict[str, object]:
@@ -677,13 +744,17 @@ class SyncVideoAudioApp(ttk.Frame):
         duration = float(self.image_duration_var.get())
         if duration <= 0:
             raise ValueError("Thời lượng ảnh/shot phải lớn hơn 0 giây")
-        mapping = self.mapping_var.get().strip()
+        alignment_mode = ALIGNMENT_OPTIONS[self.alignment_var.get()]
+        transcript = self.transcript_var.get().strip()
+        if alignment_mode is AlignmentMode.TRANSCRIPT and not transcript:
+            raise ValueError("Chế độ căn chuẩn cần chọn file transcript")
         return {
             "name": name,
             "audio": Path(self.audio_var.get()),
             "media_dir": Path(self.media_dir_var.get()),
-            "mapping": Path(mapping) if mapping else None,
-            "ordered": None if mapping else list(self.media_paths),
+            "alignment_mode": alignment_mode,
+            "transcript": Path(transcript) if transcript else None,
+            "ordered": list(self.media_paths),
             "output": Path(self.output_var.get()),
             "draft_root": (
                 Path(self.draft_root_var.get()) if self.draft_root_var.get().strip() else None
@@ -701,8 +772,10 @@ class SyncVideoAudioApp(ttk.Frame):
                 project_name=str(request["name"]),
                 audio_path=request["audio"],
                 media_dir=request["media_dir"],
-                mapping_path=request["mapping"],
                 ordered_media_paths=request["ordered"],
+                alignment_mode=request["alignment_mode"],
+                transcript_path=request["transcript"],
+                whisper_config=WhisperConfig(model="small"),
                 config=PlannerConfig(
                     canvas=request["canvas"],
                     image_shot_duration_us=int(request["image_duration"]),

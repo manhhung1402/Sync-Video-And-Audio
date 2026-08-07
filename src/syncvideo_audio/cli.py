@@ -9,7 +9,8 @@ from pathlib import Path
 
 from .manifest import CanvasSpec, TimelineProject, seconds_to_us
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
-from .planner import PlannerConfig, build_timeline
+from .planner import AlignmentMode, PlannerConfig, build_timeline
+from .transcription import WhisperConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +24,15 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--media-dir", required=True, type=Path)
     build.add_argument("--name", required=True)
     build.add_argument("--mapping", type=Path)
+    build.add_argument(
+        "--sync-mode",
+        choices=[mode.value for mode in AlignmentMode],
+        default=AlignmentMode.EQUAL.value,
+        help="equal: chia đều; transcript: dùng Whisper timestamp và ghép theo thứ tự media",
+    )
+    build.add_argument("--transcript", type=Path, help="TXT/SRT/JSON, một câu cho mỗi media")
+    build.add_argument("--whisper-model", default="small")
+    build.add_argument("--language", help="mã ngôn ngữ Whisper, ví dụ vi/en/ja")
     _add_output_arguments(build)
     build.add_argument("--width", type=int, default=1920)
     build.add_argument("--height", type=int, default=1080)
@@ -55,6 +65,12 @@ def main(argv: list[str] | None = None) -> int:
                 audio_path=args.audio,
                 media_dir=args.media_dir,
                 mapping_path=args.mapping,
+                alignment_mode=AlignmentMode(args.sync_mode),
+                transcript_path=args.transcript,
+                whisper_config=WhisperConfig(
+                    model=args.whisper_model,
+                    language=args.language,
+                ),
                 config=PlannerConfig(
                     canvas=CanvasSpec(args.width, args.height, args.fps),
                     image_shot_duration_us=seconds_to_us(args.image_duration),

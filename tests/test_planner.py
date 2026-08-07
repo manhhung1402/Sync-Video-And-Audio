@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from syncvideo_audio import (
+    AlignmentMode,
     CanvasSpec,
     MediaInfo,
     MediaType,
@@ -13,6 +14,7 @@ from syncvideo_audio import (
     seconds_to_us,
     sort_media,
 )
+from syncvideo_audio.transcription import TimedWord, WhisperConfig
 
 
 class FakeProbe:
@@ -21,6 +23,22 @@ class FakeProbe:
 
     def probe(self, path: Path) -> MediaInfo:
         return MediaInfo(seconds_to_us(self.durations[path.name]))
+
+
+class FakeTranscriber:
+    def __init__(self, words: list[TimedWord]) -> None:
+        self.words = words
+        self.calls: list[tuple[Path, str, WhisperConfig]] = []
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        transcript_hint: str,
+        config: WhisperConfig,
+    ) -> list[TimedWord]:
+        self.calls.append((audio_path, transcript_hint, config))
+        return self.words
 
 
 def touch(path: Path) -> Path:
@@ -56,6 +74,61 @@ def test_manual_media_order_is_preserved(tmp_path: Path) -> None:
     )
 
     assert [clip.path for clip in project.clips] == [second.resolve(), first.resolve()]
+
+
+def test_transcript_mode_pairs_numbered_media_with_timestamped_lines(tmp_path: Path) -> None:
+    audio = touch(tmp_path / "audio.wav")
+    media = tmp_path / "media"
+    media.mkdir()
+    first = touch(media / "img-001.png")
+    second = touch(media / "img-002.png")
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("Câu đầu tiên.\nCâu thứ hai.\n", encoding="utf-8")
+    transcriber = FakeTranscriber([
+        TimedWord("câu", 200_000, 400_000),
+        TimedWord("đầu", 420_000, 700_000),
+        TimedWord("tiên", 720_000, 1_000_000),
+        TimedWord("câu", 2_000_000, 2_200_000),
+        TimedWord("thứ", 2_220_000, 2_400_000),
+        TimedWord("hai", 2_420_000, 2_700_000),
+    ])
+
+    project = build_timeline(
+        project_name="transcript-sync",
+        audio_path=audio,
+        media_dir=media,
+        alignment_mode=AlignmentMode.TRANSCRIPT,
+        transcript_path=transcript,
+        transcriber=transcriber,
+        probe=FakeProbe({"audio.wav": 3}),
+    )
+
+    assert [clip.path for clip in project.clips] == [first.resolve(), second.resolve()]
+    assert project.clips[0].end_us == 1_500_000
+    assert project.clips[1].start_us == 1_500_000
+    assert [caption.text for caption in project.captions] == ["Câu đầu tiên.", "Câu thứ hai."]
+    assert transcriber.calls[0][1] == "Câu đầu tiên.\nCâu thứ hai."
+
+
+def test_transcript_mode_requires_one_line_per_media(tmp_path: Path) -> None:
+    audio = touch(tmp_path / "audio.wav")
+    media = tmp_path / "media"
+    media.mkdir()
+    touch(media / "img-001.png")
+    touch(media / "img-002.png")
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("Chỉ có một câu không dấu câu", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="một dòng/câu cho mỗi file"):
+        build_timeline(
+            project_name="mismatch",
+            audio_path=audio,
+            media_dir=media,
+            alignment_mode=AlignmentMode.TRANSCRIPT,
+            transcript_path=transcript,
+            transcriber=FakeTranscriber([]),
+            probe=FakeProbe({"audio.wav": 3}),
+        )
 
 
 def test_planner_without_mapping_fills_audio_and_expands_long_stills(tmp_path: Path) -> None:

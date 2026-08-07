@@ -13,6 +13,9 @@ authors = [{ name = "SyncVideo-Audio contributors" }]
 dependencies = []
 
 [project.optional-dependencies]
+transcribe = [
+  "openai-whisper>=20240930",
+]
 dev = [
   "pytest>=8.3",
 ]

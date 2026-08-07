@@ -16,12 +16,13 @@ from .manifest import (
     seconds_to_us,
     us_to_seconds,
 )
-from .planner import PlannerConfig, SceneSpec, build_timeline, load_scene_mapping, sort_media
+from .planner import AlignmentMode, PlannerConfig, SceneSpec, build_timeline, load_scene_mapping, sort_media
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
 from .probe import FfprobeMediaProbe, MediaInfo, ProbeError
 
 __all__ = [
     "AudioTrack",
+    "AlignmentMode",
     "CapCutDraftExporter",
     "CapCutExportError",
     "CapCutExportResult",
