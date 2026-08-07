@@ -1,83 +1,100 @@
 # SyncVideo-Audio
 
-Công cụ Windows độc lập để xếp ảnh/video theo audio thuyết minh, tạo bản xem
-trước MP4 và bàn giao một project CapCut native vẫn chỉnh sửa được.
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)](https://www.microsoft.com/windows)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Khác với phần CapCut export hiện có của `Agions/vynaro` (mới chỉ sinh một
-`draft_info.json` mô phỏng), project này tạo đầy đủ `draft_content.json`,
-`draft_meta_info.json`, timeline mirror, asset cục bộ và registry entry theo
-schema quan sát từ **CapCut International 9.1.0**.
+Local-first Windows tool for turning an ordered set of images/videos and a narration track into:
 
-## Chức năng
+- a preview MP4;
+- an editable CapCut Desktop native draft;
+- a JSON timeline manifest that can be exported again after manual edits.
 
-- Hai chế độ đồng bộ: chia đều hoặc căn chuẩn theo transcript + Whisper timestamp.
-- MP4 preview có thể burn caption cố định; caption vẫn được lưu theo mốc trong manifest để tiếp tục dựng trong CapCut.
-- Tự thêm chỉ số `(2)`, `(3)`... khi tên project đã tồn tại.
-- Progress bar theo dõi Whisper, render MP4, copy asset và CapCut export.
-- Tự xếp file có prefix `img-001`, `vid-002`, ...; file không có số đứng sau.
-- Cho phép đổi thứ tự thủ công trong GUI.
-- Căn đều theo độ dài audio hoặc nhận `mapping.json` có timestamp từng cảnh.
-- Ảnh dài tự tách thành các shot (mặc định 6 giây).
-- Video tự trim, đổi speed hoặc lặp bằng các segment vẫn chỉnh được.
-- Sáu preset keyframe CapCut nhẹ cho cả ảnh và video: zoom in/out, pan ngang/dọc hai chiều.
-- Ba mode output: `mp4`, `capcut`, `both`.
-- Luôn lưu `*.timeline.json` làm hợp đồng hand-off có thể export lại.
-- Copy asset vào project CapCut để tránh mất link khi di chuyển source.
-- Tự dò Draft root và đăng ký project vào CapCut bằng ghi file atomic.
+The project is designed for predictable hand-off: media order is explicit, transcript sentences are matched by order, and no image or video semantic analysis is performed.
 
-## Yêu cầu
+> **Status:** beta. CapCut's draft format is private and undocumented. The exporter currently targets the schema observed in CapCut International 9.1.0.
 
-- Windows 10/11, Python 3.10 trở lên.
-- `ffmpeg` và `ffprobe` có trong `PATH`.
-- Chế độ căn transcript cần backend Whisper local: `pip install -e ".[transcribe]"`.
-- CapCut International 9.1 được khuyến nghị cho native draft.
+## Features
 
-## Cài và chạy GUI
+- Equal-duration synchronization or transcript-guided timestamp alignment.
+- Sentence splitting by punctuation, not by line breaks. Latin punctuation and CJK punctuation (`。`, `！`, `？`, `｡`, `．`, `…`) are supported.
+- Local `faster-whisper` transcription with Vietnamese, Japanese, Korean, Chinese and other Whisper languages.
+- Optional hard-burn captions in the MP4 preview with bundled Noto Sans CJK font support.
+- Gentle zoom/pan motion with CapCut keyframes for images and videos.
+- Automatic project-name collision handling: `Project`, `Project (2)`, `Project (3)`, …
+- Determinate progress reporting for transcription, rendering, asset copy and CapCut export.
+- Windows GUI with no black child-console windows.
+- Atomic CapCut draft export with copied local assets and registry hand-off.
+- Three output modes: `mp4`, `capcut`, and `both`.
+
+## Synchronization modes
+
+| Mode | Inputs | Behavior |
+| --- | --- | --- |
+| Equal duration | Audio + ordered media | Splits the audio duration evenly across media in numeric order. |
+| Transcript | Audio + transcript + ordered media | Whisper supplies word timestamps; each transcript sentence is assigned to the next media item in order. |
+
+The transcript mode does not analyze visual content and does not decide which image “matches” a sentence. The number of transcript sentences must equal the number of media items.
+
+### Transcript splitting rules
+
+Line breaks are normalized to spaces. A new scene is created only after sentence punctuation. This works for text such as:
+
+```text
+朝です。「元気ですか？」はい！
+한국어 문장입니다. 다음 문장입니다!
+早晨开始了。鸟儿在歌唱！
+```
+
+Supported input formats are `.txt`, `.srt`, and `.json`. JSON may contain `text` or `sourceText` scene fields.
+
+## Captions and CapCut drafts
+
+The planner stores captions and their time ranges in `*.timeline.json`. When **Burn caption vào MP4 preview** is enabled, FFmpeg renders those captions permanently into the preview video using ASS subtitles and the bundled CJK font.
+
+The native CapCut draft currently contains the visual/audio timeline, motion keyframes, and copied assets. It does not automatically create a native CapCut text track yet; use the manifest timings or the burned preview as the caption reference when continuing the edit in CapCut.
+
+## Requirements
+
+For development:
+
+- Windows 10/11;
+- Python 3.10 or newer;
+- FFmpeg and FFprobe available on `PATH`;
+- CapCut Desktop is required only for opening/registering native drafts;
+- `faster-whisper` is required for transcript mode.
+
+The customer installer bundles Python runtime, FFmpeg/FFprobe, the `small` Whisper model and Noto Sans CJK. Customers do not need to install these separately.
+
+## Install for development
 
 ```powershell
-cd G:\GitHub\SyncVideo-Audio
-python -m pip install -e ".[transcribe]"
+git clone <your-repository-url>
+cd SyncVideo-Audio
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[transcribe,dev]"
+```
+
+## Run the GUI
+
+```powershell
 syncvideo-audio-gui
 ```
 
-Trong GUI:
+Typical workflow:
 
-1. Chọn audio và thư mục ảnh/video.
-2. Kiểm tra danh sách, dùng **Lên/Xuống** nếu cần đổi thứ tự.
-3. Chọn `both` để nhận cả MP4 và CapCut project.
-4. Đóng project đang mở trong CapCut rồi bấm **Tạo hand-off**.
+1. Choose the narration audio and the image/video directory.
+2. Confirm the numeric media order and adjust it with **Lên/Xuống** if needed.
+3. Select `Equal duration` or `Transcript` mode.
+4. Enable caption burn-in if an MP4 with permanent captions is required.
+5. Choose `both` to create both the preview and the CapCut draft.
+6. Close the currently open CapCut project before registering a new draft.
 
-## Hai chế độ đồng bộ
+## CLI examples
 
-### 1. Chia đều theo audio
-
-Giữ hành vi nhanh hiện tại: toàn bộ duration audio được chia đều cho media theo
-thứ tự `001 → 002 → 003…`. Chế độ này không cần transcript hoặc Whisper.
-
-### 2. Căn chuẩn theo transcript
-
-Đầu vào gồm audio, transcript và thư mục media. Mỗi câu transcript tương
-ứng đúng một media theo số thứ tự:
-
-```text
-Câu 1  → img/vid-001
-Câu 2  → img/vid-002
-Câu 3  → img/vid-003
-```
-
-Whisper chạy local để lấy timestamp từng từ. Tool căn các câu transcript chuẩn
-vào timestamp đó, giữ cả khoảng nghỉ giữa câu, rồi dựng timeline. Không phân
-tích nội dung ảnh/video và không tự đổi thứ tự media.
-
-GUI cho phép dán transcript trực tiếp hoặc chọn `.txt`, `.srt`, `.json`. Câu chỉ
-được tách tại `. ! ? … 。！？`; xuống dòng chỉ được coi là khoảng trắng.
-Bộ tách và căn timestamp hỗ trợ Latin, tiếng Nhật, Hàn và Trung, kể cả
-văn bản CJK không có khoảng trắng. Số câu phải bằng số media. Lần chạy
-Whisper đầu tiên sẽ tải model về cache.
-
-## CLI
-
-Tạo mới từ audio và thư mục media:
+Equal-duration mode:
 
 ```powershell
 syncvideo-audio build `
@@ -88,7 +105,7 @@ syncvideo-audio build `
   --output-dir "D:\Job\output"
 ```
 
-Căn chuẩn theo transcript:
+Transcript-guided mode:
 
 ```powershell
 syncvideo-audio build `
@@ -103,75 +120,16 @@ syncvideo-audio build `
   --output-dir "D:\Job\output"
 ```
 
-Nếu không truyền `--draft-root`, tool tự dò CapCut. Có thể chỉ định rõ:
+Useful options include `--draft-root`, `--mapping`, `--width`, `--height`, `--fps`, `--no-motion`, `--no-register`, and `--overwrite-mp4`. The GUI burn-in option is intentionally separate from the CLI so existing manifest/export workflows remain compatible.
 
-```powershell
---draft-root "D:\Capcut Draft\CapCut Drafts"
-```
+## Output layout
 
-Export lại từ timeline manifest đã chỉnh:
-
-```powershell
-syncvideo-audio export "D:\Job\output\Video 001.timeline.json" `
-  --mode capcut `
-  --output-dir "D:\Job\output" `
-  --draft-root "D:\Capcut Draft\CapCut Drafts"
-```
-
-Các option hữu ích:
-
-- `--mapping scenes.json`: dùng scene map thay vì chia đều.
-- `--sync-mode equal|transcript`: chọn cách căn timeline.
-- `--transcript voice.txt`: transcript chuẩn, một câu được tách theo dấu kết câu cho mỗi media.
-- `--whisper-model tiny|base|small|medium|large`: model timestamp local.
-- `--width`, `--height`, `--fps`: cấu hình canvas.
-- `--image-duration 6`: số giây tối đa mỗi shot ảnh.
-- `--no-motion`: không tạo motion/keyframe.
-- GUI: bật `Burn caption vào MP4 preview` để hard-burn caption vào video xem trước.
-- `--no-register`: tạo folder draft nhưng không sửa registry CapCut.
-- `--overwrite-mp4`: cho phép ghi đè bản MP4.
-
-## Bộ cài cho khách hàng
-
-Payload full được build onedir bằng `packaging/build_full.ps1`. Payload bao gồm
-GUI không console, FFmpeg/ffprobe, font Noto Sans CJK và model faster-whisper small;
-khách hàng không cần cài Python hay FFmpeg riêng. Nếu máy build có Inno Setup,
-script tự sinh `dist-installer/SyncVideo-Audio-Setup-0.1.0.exe` và shortcut desktop.
-
-Tác giả hiển thị trong giao diện và metadata: **YudgnuH (Nguyễn Duy Hưng)**.
-
-## Scene mapping
-
-Timestamp thủ công dùng giây:
-
-```json
-[
-  {
-    "clip": "img-001.png",
-    "audio_start": 0.0,
-    "audio_end": 4.2,
-    "text": "Câu thứ nhất"
-  },
-  {
-    "clip": "vid-002.mp4",
-    "audio_start": 4.2,
-    "audio_end": 9.8,
-    "text": "Câu thứ hai"
-  }
-]
-```
-
-Nếu bỏ toàn bộ `audio_start`/`audio_end`, thời lượng sẽ được phân theo số từ
-trong `text`/`sourceText`. Không được trộn scene có timestamp với scene không có.
-
-## Output hand-off
-
-Mode `both` tạo:
+`both` mode produces a hand-off manifest and preview:
 
 ```text
 output/
-├── Video 001.timeline.json   # nguồn sự thật để export lại
-└── Video 001.mp4             # bản xem trước
+├── Video 001.timeline.json
+└── Video 001.mp4
 
 CapCut Drafts/
 └── Video 001/
@@ -179,31 +137,97 @@ CapCut Drafts/
     ├── draft_meta_info.json
     ├── timeline_layout.json
     ├── Timelines/
-    │   ├── project.json
-    │   └── <timeline-id>/draft_content.json
-    └── Resources/syncvideo_media/  # asset đã copy
+    └── Resources/syncvideo_media/
 ```
 
-Chi tiết quy trình bàn giao và rollback xem [docs/HANDOFF.md](docs/HANDOFF.md).
+When a name already exists, the next available suffix is used instead of overwriting the earlier hand-off.
 
-## Build file EXE Windows
+## Build Windows artifacts
+
+### Development EXE
+
+This build expects FFmpeg and FFprobe on `PATH` and is useful for local testing:
 
 ```powershell
 python -m pip install pyinstaller
 powershell -ExecutionPolicy Bypass -File .\packaging\build_windows.ps1
 ```
 
-Artifact nằm tại `dist\SyncVideo-Audio.exe`. FFmpeg không được nhúng vào EXE;
-máy nhận bàn giao vẫn cần `ffmpeg`/`ffprobe` trong `PATH`.
+The result is written to `dist/`.
 
-## Phát triển và kiểm tra
+### Full customer installer
+
+The full build is an onedir payload followed by Inno Setup packaging:
+
+```powershell
+python -m pip install pyinstaller
+powershell -ExecutionPolicy Bypass -File .\packaging\build_full.ps1
+```
+
+The full build expects these local assets:
+
+```text
+assets/fonts/NotoSansCJK-Regular.ttc
+assets/models/small/
+assets/tools/ffmpeg.exe
+assets/tools/ffprobe.exe
+```
+
+The generated files are:
+
+- `dist-full/SyncVideo-Audio/` — portable onedir payload;
+- `dist-installer/SyncVideo-Audio-Setup-0.1.0.exe` — customer installer.
+
+The large model and executable assets are intentionally ignored by Git. Keep them in the release/build environment and publish checksums for downloadable binaries.
+
+## Development
 
 ```powershell
 python -m pip install -e ".[dev]"
 python -m pytest
-python -m pip wheel . --no-deps --wheel-dir dist-wheel
+python -m compileall -q src packaging
 ```
 
-Định dạng CapCut là private/undocumented. Exporter cố ý tách riêng schema adapter
-để có thể cập nhật khi CapCut đổi version. Không chỉnh tay draft đang mở trong
-CapCut; luôn giữ `timeline.json` và source media để tái tạo project.
+The code is split into small adapters:
+
+- `planner.py` — media ordering, equal/transcript alignment and caption ranges;
+- `transcription.py` — sentence parsing and Whisper backends;
+- `ffmpeg_renderer.py` — MP4 rendering, motion filters and caption burn-in;
+- `capcut_schema.py` / `capcut_exporter.py` — native draft structure and asset hand-off;
+- `pipeline.py` — output collision handling and orchestration;
+- `gui.py` — Windows GUI;
+- `packaging/` — PyInstaller and Inno Setup definitions.
+
+## Privacy and safety
+
+Processing is local by default. Audio, transcripts and media are not uploaded by this project. Whisper model downloads or CapCut behavior may still involve third-party software when explicitly configured by the user.
+
+Never overwrite a draft that is open in CapCut. Keep the `*.timeline.json` manifest and original media so a hand-off can be reproduced after a CapCut schema change.
+
+## Known limitations
+
+- CapCut's native schema is undocumented and may change between versions.
+- Transcript alignment is order-based; it is not semantic image/video matching.
+- Native CapCut text-track generation is not implemented yet.
+- The full installer is Windows-only.
+
+## Contributing
+
+Issues and pull requests are welcome. Please include:
+
+- Windows and CapCut versions;
+- synchronization mode;
+- a minimal transcript/media example when possible;
+- the generated error message or test reproduction.
+
+Avoid committing personal media, audio, Whisper caches, generated drafts, or the large binary release payload.
+
+## License and third-party components
+
+The project-owned source code and logo assets are released under the [MIT License](LICENSE). Bundled third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Author: **YudgnuH (Nguyễn Duy Hưng)**
+
+## Tóm tắt tiếng Việt
+
+SyncVideo-Audio là công cụ Windows tạo preview MP4 và project CapCut native từ audio thuyết minh cùng danh sách ảnh/video có thứ tự. Có hai chế độ: chia đều thời lượng hoặc căn timestamp bằng transcript + Whisper. Caption có thể burn cố định vào MP4; draft CapCut hiện chưa tự tạo text track native. Dự án dùng MIT License cho code và logo, còn FFmpeg/model/font tuân theo license riêng được ghi trong [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
