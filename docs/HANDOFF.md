@@ -3,6 +3,16 @@
 Mục tiêu của hand-off là người nhận có thể xem nhanh bằng MP4, sau đó mở CapCut
 để chỉnh timing, crop, âm lượng và keyframe mà không phải dựng lại timeline.
 
+## Chọn chế độ đồng bộ
+
+- `Chia đều theo audio`: chia duration audio cho media theo thứ tự đã sắp xếp.
+- `Căn chuẩn theo transcript`: nhận thêm TXT/SRT/JSON, chạy Whisper local để
+  lấy timestamp từ voice, rồi ghép dòng/cue 1 với media 001, dòng/cue 2 với
+  media 002, v.v. Số dòng/cue phải bằng số media.
+
+Whisper chỉ xác định timing của transcript. Tool không phân tích nội dung ảnh/video
+và không tự thay đổi thứ tự media.
+
 ## Người tạo project
 
 1. Đóng project CapCut đang mở.
@@ -35,8 +45,9 @@ nhận folder từ máy khác:
 và CapCut draft đều được tạo từ cùng manifest, nên khác biệt output không được
 khắc phục bằng cách sửa riêng backend. Hãy sửa manifest/mapping rồi export lại.
 
-Các segment video giữ `sourceStartUs`, `sourceDurationUs`, `speed`; ảnh giữ
-`motion`. Vì vậy người nhận vẫn có thể điều chỉnh các giá trị này trong CapCut.
+Các segment video giữ `sourceStartUs`, `sourceDurationUs`, `speed`; cả ảnh và video
+giữ `motion`. Vì vậy người nhận vẫn có thể điều chỉnh timing, speed và
+keyframe trực tiếp trong CapCut.
 
 ## Rollback và xử lý lỗi
 
@@ -55,6 +66,7 @@ Các segment video giữ `sourceStartUs`, `sourceDurationUs`, `speed`; ảnh gi�
 - [ ] Thứ tự ảnh/video đúng.
 - [ ] CapCut hiển thị một video track và một audio track.
 - [ ] Mỗi ảnh là segment riêng, không phải video đã flatten.
-- [ ] Keyframe scale/position xuất hiện trên các ảnh có motion.
+- [ ] Keyframe scale/position xuất hiện trên cả ảnh và video có motion.
+- [ ] Với transcript mode, số caption/cảnh bằng số media và thứ tự 001 → 002 → 003 được giữ nguyên.
 - [ ] Asset không báo offline sau khi đổi tên/di chuyển source ban đầu.
 - [ ] Timeline mirror và root `draft_content.json` giống nhau.
