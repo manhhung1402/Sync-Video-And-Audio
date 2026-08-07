@@ -43,6 +43,7 @@ def make_project(tmp_path: Path) -> TimelineProject:
                 source_start_us=0,
                 source_duration_us=3_000_000,
                 volume=0.25,
+                motion=MotionPreset.ZOOM_OUT,
             ),
         ],
     )
@@ -93,7 +94,7 @@ def test_content_has_editable_tracks_and_resolved_materials(tmp_path: Path) -> N
     assert [item["type"] for item in content["materials"]["videos"]] == ["photo", "video"]
     video_segments = content["tracks"][0]["segments"]
     assert video_segments[0]["common_keyframes"][0]["property_type"] == "KFTypeScaleX"
-    assert video_segments[1]["common_keyframes"] == []
+    assert video_segments[1]["common_keyframes"][0]["property_type"] == "KFTypeScaleX"
     assert content["tracks"][1]["segments"][0]["common_keyframes"] == []
 
     ids = {

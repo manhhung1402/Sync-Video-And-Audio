@@ -128,8 +128,6 @@ class TimelineClip:
             raise ValueError("clip speed must be finite and positive")
         if self.volume < 0:
             raise ValueError("clip volume cannot be negative")
-        if self.media_type is MediaType.VIDEO and self.motion is not MotionPreset.NONE:
-            raise ValueError("motion presets are only valid for still images")
 
     @property
     def end_us(self) -> int:

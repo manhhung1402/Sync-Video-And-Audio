@@ -31,10 +31,19 @@ def test_image_filter_uses_manifest_motion_and_canvas(tmp_path: Path) -> None:
 def test_video_filter_uses_manifest_speed(tmp_path: Path) -> None:
     video = tmp_path / "video.mp4"
     video.write_bytes(b"video")
-    clip = TimelineClip(MediaType.VIDEO, video, 0, 1_000_000, source_duration_us=2_000_000, speed=2.0)
+    clip = TimelineClip(
+        MediaType.VIDEO,
+        video,
+        0,
+        1_000_000,
+        source_duration_us=2_000_000,
+        speed=2.0,
+        motion=MotionPreset.ZOOM_IN,
+    )
     value = build_video_filter(project(tmp_path, clip), clip)
     assert value.startswith("setpts=PTS/2.000000000")
     assert "crop=1080:1920" in value
+    assert "perspective=" in value
     assert "tpad=stop_mode=clone" in value
 
 

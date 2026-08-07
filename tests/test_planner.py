@@ -187,6 +187,7 @@ def test_manual_mapping_builds_captions_and_resolves_media(tmp_path: Path) -> No
     assert [clip.media_type for clip in project.clips] == [MediaType.IMAGE, MediaType.VIDEO]
     assert [caption.text for caption in project.captions] == ["Cảnh một", "Cảnh hai"]
     assert project.clips[1].speed == pytest.approx(0.5)
+    assert all(clip.motion is not MotionPreset.NONE for clip in project.clips)
 
 
 def test_story_mapping_allocates_time_by_word_weight(tmp_path: Path) -> None:

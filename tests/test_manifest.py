@@ -82,15 +82,15 @@ def test_manifest_rejects_items_beyond_audio_duration() -> None:
         )
 
 
-def test_video_cannot_receive_still_motion() -> None:
-    with pytest.raises(ValueError, match="still images"):
-        TimelineClip(
-            MediaType.VIDEO,
-            Path("video.mp4"),
-            0,
-            seconds_to_us(1),
-            motion=MotionPreset.ZOOM_IN,
-        )
+def test_video_can_receive_editable_motion() -> None:
+    clip = TimelineClip(
+        MediaType.VIDEO,
+        Path("video.mp4"),
+        0,
+        seconds_to_us(1),
+        motion=MotionPreset.ZOOM_IN,
+    )
+    assert clip.motion is MotionPreset.ZOOM_IN
 
 
 def test_manifest_rejects_unknown_schema() -> None:

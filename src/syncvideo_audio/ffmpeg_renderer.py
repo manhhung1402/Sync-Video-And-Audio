@@ -128,21 +128,31 @@ class FfmpegRenderer:
 
 
 def build_video_filter(project: TimelineProject, clip: TimelineClip) -> str:
-    width, height, fps = project.canvas.width, project.canvas.height, project.canvas.fps
-    return (
+    width, height = project.canvas.width, project.canvas.height
+    base = (
         f"setpts=PTS/{clip.speed:.9f},"
         f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
-        f"crop={width}:{height},fps={fps},"
-        "tpad=stop_mode=clone:stop_duration=1,setsar=1,format=yuv420p"
+        f"crop={width}:{height}"
     )
+    motion = _motion_perspective(project, clip, base)
+    return f"{motion},tpad=stop_mode=clone:stop_duration=1,setsar=1,format=yuv420p"
 
 
 def build_image_filter(project: TimelineProject, clip: TimelineClip) -> str:
-    width, height, fps = project.canvas.width, project.canvas.height, project.canvas.fps
+    width, height = project.canvas.width, project.canvas.height
     base = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop={width}:{height}"
     )
+    return _motion_perspective(project, clip, base)
+
+
+def _motion_perspective(
+    project: TimelineProject,
+    clip: TimelineClip,
+    base: str,
+) -> str:
+    fps = project.canvas.fps
     if clip.motion is MotionPreset.NONE:
         return f"{base},fps={fps},setsar=1,format=yuv420p"
 

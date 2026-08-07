@@ -240,7 +240,14 @@ def build_timeline(
             clips.extend(image_clips)
             motion_index += len(image_clips)
         elif suffix in VIDEO_EXTENSIONS:
-            clips.extend(_plan_video(scene, cfg, media_probe.probe(scene.path).duration_us))
+            video_clips = _plan_video(
+                scene,
+                cfg,
+                media_probe.probe(scene.path).duration_us,
+                motion_index,
+            )
+            clips.extend(video_clips)
+            motion_index += len(video_clips)
         else:
             raise ValueError(f"unsupported scene media: {scene.path}")
         if cfg.add_captions and scene.text.strip():
@@ -302,6 +309,7 @@ def _plan_video(
     scene: SceneSpec,
     config: PlannerConfig,
     source_duration_us: int,
+    motion_index: int,
 ) -> list[TimelineClip]:
     if source_duration_us <= 0:
         raise ValueError(f"video duration must be positive: {scene.path}")
@@ -329,9 +337,14 @@ def _plan_video(
             source_duration_us=used_source_us,
             speed=speed,
             volume=0.0,
+            motion=(
+                MOTION_CYCLE[(motion_index + loop_index) % len(MOTION_CYCLE)]
+                if config.motion_enabled
+                else MotionPreset.NONE
+            ),
             scene_index=scene.scene_index,
         )
-        for start, end in ranges
+        for loop_index, (start, end) in enumerate(ranges)
     ]
 
 
