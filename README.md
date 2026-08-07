@@ -4,6 +4,13 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+<p align="center">
+  <img src="assets/logo-64.png" width="96" alt="SyncVideo-Audio logo">
+</p>
+
+<p align="center"><strong>CapCut Hand-off Studio</strong><br>
+Create an ordered video timeline from narration, then continue editing in CapCut.</p>
+
 Local-first Windows tool for turning an ordered set of images/videos and a narration track into:
 
 - a preview MP4;
@@ -13,6 +20,19 @@ Local-first Windows tool for turning an ordered set of images/videos and a narra
 The project is designed for predictable hand-off: media order is explicit, transcript sentences are matched by order, and no image or video semantic analysis is performed.
 
 > **Status:** beta. CapCut's draft format is private and undocumented. The exporter currently targets the schema observed in CapCut International 9.1.0.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><strong>SyncVideo-Audio GUI</strong></td>
+    <td align="center"><strong>CapCut native draft</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/gui-overview.png" alt="SyncVideo-Audio GUI with ordered media and progress bar"></td>
+    <td><img src="docs/images/capcut-timeline.png" alt="Generated CapCut timeline with ordered clips and narration"></td>
+  </tr>
+</table>
 
 ## Features
 
@@ -66,10 +86,21 @@ For development:
 
 The customer installer bundles Python runtime, FFmpeg/FFprobe, the `small` Whisper model and Noto Sans CJK. Customers do not need to install these separately.
 
+## Installation for customers
+
+Download the latest Windows installer from the [Releases](https://github.com/yudgunH/SyncVideo-Audio/releases) page:
+
+1. Run `SyncVideo-Audio-Setup-<version>.exe`.
+2. Keep the default installation directory or choose another one.
+3. Launch **SyncVideo-Audio** from the Start menu or desktop shortcut.
+4. Install CapCut Desktop separately if native draft registration is required.
+
+The installer includes the application runtime, FFmpeg/FFprobe, Whisper `small` model and CJK font. No Python installation or terminal command is required for normal customer use.
+
 ## Install for development
 
 ```powershell
-git clone <your-repository-url>
+git clone https://github.com/yudgunH/SyncVideo-Audio.git
 cd SyncVideo-Audio
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -179,6 +210,18 @@ The generated files are:
 - `dist-installer/SyncVideo-Audio-Setup-0.1.0.exe` — customer installer.
 
 The large model and executable assets are intentionally ignored by Git. Keep them in the release/build environment and publish checksums for downloadable binaries.
+
+## Release checklist
+
+Before publishing a GitHub release:
+
+1. Run `python -m pytest` and `git diff --check`.
+2. Build `dist-full/SyncVideo-Audio/` and smoke-test the EXE on a clean Windows account.
+3. Build `dist-installer/SyncVideo-Audio-Setup-<version>.exe` with Inno Setup.
+4. Create an annotated tag such as `v0.1.0` and upload the installer as a release asset.
+5. Publish SHA-256 checksums for the installer and portable payload.
+
+Release notes should state the supported CapCut version, included Whisper model, FFmpeg build/license configuration and any known schema limitations.
 
 ## Development
 
