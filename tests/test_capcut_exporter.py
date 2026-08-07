@@ -107,6 +107,31 @@ def test_content_has_editable_tracks_and_resolved_materials(tmp_path: Path) -> N
             assert segment["material_id"] in ids
             assert set(segment["extra_material_refs"]) <= ids
 
+    buckets_by_id = {
+        item["id"]: bucket
+        for bucket, items in content["materials"].items()
+        for item in items
+        if "id" in item
+    }
+    assert [buckets_by_id[item] for item in video_segments[0]["extra_material_refs"]] == [
+        "speeds",
+        "placeholder_infos",
+        "canvases",
+        "sound_channel_mappings",
+        "material_colors",
+        "vocal_separations",
+    ]
+    assert [
+        buckets_by_id[item]
+        for item in content["tracks"][1]["segments"][0]["extra_material_refs"]
+    ] == [
+        "speeds",
+        "placeholder_infos",
+        "beats",
+        "sound_channel_mappings",
+        "vocal_separations",
+    ]
+
     asset_paths = [Path(item["path"]) for item in content["materials"]["videos"]]
     asset_paths += [Path(content["materials"]["audios"][0]["path"])]
     assert all(path.is_absolute() and path.is_file() for path in asset_paths)

@@ -226,7 +226,7 @@ def _visual_material(
         "path": capcut_path(media_path),
         "media_path": "",
         "local_id": "",
-        "has_audio": clip.media_type is MediaType.VIDEO and clip.volume > 0,
+        "has_audio": clip.media_type is MediaType.VIDEO,
         "reverse_path": "",
         "intensifies_path": "",
         "reverse_intensifies_path": "",
@@ -331,7 +331,7 @@ def _base_segment(
 
 
 def _visual_support_materials(materials: dict[str, list[dict[str, Any]]]) -> list[str]:
-    refs = _common_support_materials(materials)
+    speed_id, placeholder_id, sound_id, vocal_id = _common_support_materials(materials)
     canvas_id = capcut_id()
     materials["canvases"].append({
         "album_image": "", "blur": 0.0, "color": "", "id": canvas_id,
@@ -339,31 +339,56 @@ def _visual_support_materials(materials: dict[str, list[dict[str, Any]]]) -> lis
         "team_id": "", "type": "canvas_color",
     })
     color_id = capcut_id()
-    materials["material_colors"].append({"id": color_id, "type": "material_color"})
-    return [canvas_id, *refs, color_id]
+    materials["material_colors"].append({
+        "id": color_id,
+        "is_color_clip": False,
+        "is_gradient": False,
+        "solid_color": "",
+        "gradient_colors": [],
+        "gradient_percents": [],
+        "gradient_angle": 90.0,
+        "width": 0.0,
+        "height": 0.0,
+    })
+    return [speed_id, placeholder_id, canvas_id, sound_id, color_id, vocal_id]
 
 
 def _audio_support_materials(materials: dict[str, list[dict[str, Any]]]) -> list[str]:
-    refs = _common_support_materials(materials)
+    speed_id, placeholder_id, sound_id, vocal_id = _common_support_materials(materials)
     beats_id = capcut_id()
     materials["beats"].append({
-        "ai_beats": {"beat_speed_infos": [], "beats_path": "", "beats_url": "", "melody_path": "", "melody_url": ""},
+        "ai_beats": {
+            "beat_speed_infos": [], "beats_path": "", "beats_url": "",
+            "melody_path": "", "melody_url": "", "melody_percents": [0.6],
+        },
         "enable_ai_beats": False, "gear": 404, "gear_count": 0, "id": beats_id,
         "mode": 404, "type": "beats", "user_beats": [], "user_delete_ai_beats": None,
     })
-    return [*refs, beats_id]
+    return [speed_id, placeholder_id, beats_id, sound_id, vocal_id]
 
 
-def _common_support_materials(materials: dict[str, list[dict[str, Any]]]) -> list[str]:
+def _common_support_materials(
+    materials: dict[str, list[dict[str, Any]]]
+) -> tuple[str, str, str, str]:
     speed_id = capcut_id()
     placeholder_id = capcut_id()
     sound_id = capcut_id()
     vocal_id = capcut_id()
     materials["speeds"].append({"curve_speed": None, "id": speed_id, "mode": 0, "speed": 1.0, "type": "speed"})
-    materials["placeholder_infos"].append({"id": placeholder_id, "meta_type": "none", "type": "placeholder_info"})
-    materials["sound_channel_mappings"].append({"audio_channel_mapping": 0, "id": sound_id, "is_config_open": False, "type": "none"})
-    materials["vocal_separations"].append({"choice": 0, "id": vocal_id, "production_path": "", "removed_sounds": [], "time_range": None, "type": "vocal_separation"})
-    return [speed_id, placeholder_id, sound_id, vocal_id]
+    materials["placeholder_infos"].append({
+        "id": placeholder_id, "meta_type": "none", "type": "placeholder_info",
+        "res_path": "", "res_text": "", "error_path": "", "error_text": "",
+    })
+    materials["sound_channel_mappings"].append({
+        "audio_channel_mapping": 0, "id": sound_id,
+        "is_config_open": False, "type": "",
+    })
+    materials["vocal_separations"].append({
+        "choice": 0, "id": vocal_id, "production_path": "",
+        "removed_sounds": [], "time_range": None, "type": "vocal_separation",
+        "final_algorithm": "", "enter_from": "",
+    })
+    return speed_id, placeholder_id, sound_id, vocal_id
 
 
 def make_timeline_project(timeline_id: str, timestamp_us: int) -> dict[str, Any]:

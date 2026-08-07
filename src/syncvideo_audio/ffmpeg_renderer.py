@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import shutil
 import subprocess
 import tempfile
@@ -52,7 +53,8 @@ class FfmpegRenderer:
             normalized: list[Path] = []
             for index, clip in enumerate(project.clips):
                 clip_output = temporary / f"clip-{index:05d}.mp4"
-                self._render_clip(project, clip, clip_output)
+                frame_count = _timeline_frame_count(project, clip, index == len(project.clips) - 1)
+                self._render_clip(project, clip, clip_output, frame_count)
                 normalized.append(clip_output)
             visual = temporary / "visual.mp4"
             self._concat(normalized, visual, temporary / "concat.txt")
@@ -61,15 +63,20 @@ class FfmpegRenderer:
             os.replace(final, output)
         return output
 
-    def _render_clip(self, project: TimelineProject, clip: TimelineClip, output: Path) -> None:
-        seconds = us_to_seconds(clip.duration_us)
+    def _render_clip(
+        self,
+        project: TimelineProject,
+        clip: TimelineClip,
+        output: Path,
+        frame_count: int,
+    ) -> None:
         if clip.media_type is MediaType.IMAGE:
             command = [
                 self.config.ffmpeg, "-y", "-loglevel", "error",
                 "-loop", "1", "-framerate", str(project.canvas.fps),
                 "-i", str(clip.path),
                 "-an", "-vf", build_image_filter(project, clip),
-                "-t", f"{seconds:.6f}", "-r", str(project.canvas.fps),
+                "-frames:v", str(frame_count), "-r", str(project.canvas.fps),
                 *self._video_encoder(), str(output),
             ]
         else:
@@ -80,7 +87,7 @@ class FfmpegRenderer:
                 "-t", f"{us_to_seconds(source_duration):.6f}",
                 "-i", str(clip.path), "-an",
                 "-vf", build_video_filter(project, clip),
-                "-t", f"{seconds:.6f}", "-r", str(project.canvas.fps),
+                "-frames:v", str(frame_count), "-r", str(project.canvas.fps),
                 *self._video_encoder(), str(output),
             ]
         self._run(command)
@@ -125,7 +132,8 @@ def build_video_filter(project: TimelineProject, clip: TimelineClip) -> str:
     return (
         f"setpts=PTS/{clip.speed:.9f},"
         f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
-        f"crop={width}:{height},fps={fps},setsar=1,format=yuv420p"
+        f"crop={width}:{height},fps={fps},"
+        "tpad=stop_mode=clone:stop_duration=1,setsar=1,format=yuv420p"
     )
 
 
@@ -170,17 +178,30 @@ def build_image_filter(project: TimelineProject, clip: TimelineClip) -> str:
         ),
     }
     x0, y0, x1, y2 = motions[clip.motion]
-    duration = us_to_seconds(clip.duration_us)
     return (
         f"{base},perspective=x0='{x0}':y0='{y0}':x1='{x1}':y1='{y0}'"
         f":x2='{x0}':y2='{y2}':x3='{x1}':y3='{y2}'"
         f":interpolation=cubic:sense=source:eval=frame,"
-        f"fps={fps},trim=duration={duration:.6f},setpts=PTS-STARTPTS,setsar=1,format=yuv420p"
+        f"fps={fps},setpts=PTS-STARTPTS,setsar=1,format=yuv420p"
     )
 
 
 def _concat_escape(path: Path) -> str:
     return path.as_posix().replace("'", "'\\''")
+
+
+def _timeline_frame_count(
+    project: TimelineProject,
+    clip: TimelineClip,
+    is_last: bool,
+) -> int:
+    fps = project.canvas.fps
+    start_frame = round(clip.start_us * fps / 1_000_000)
+    if is_last:
+        end_frame = math.ceil(project.duration_us * fps / 1_000_000)
+    else:
+        end_frame = round(clip.end_us * fps / 1_000_000)
+    return max(1, end_frame - start_frame)
 
 
 def ffmpeg_available(executable: str = "ffmpeg") -> bool:

@@ -9,6 +9,7 @@ from syncvideo_audio import (
     TimelineProject,
 )
 from syncvideo_audio.ffmpeg_renderer import build_image_filter, build_video_filter
+from syncvideo_audio.ffmpeg_renderer import _timeline_frame_count
 
 
 def project(tmp_path: Path, clip: TimelineClip) -> TimelineProject:
@@ -34,3 +35,25 @@ def test_video_filter_uses_manifest_speed(tmp_path: Path) -> None:
     value = build_video_filter(project(tmp_path, clip), clip)
     assert value.startswith("setpts=PTS/2.000000000")
     assert "crop=1080:1920" in value
+    assert "tpad=stop_mode=clone" in value
+
+
+def test_frame_allocation_never_ends_before_audio(tmp_path: Path) -> None:
+    image = tmp_path / "image.png"
+    image.write_bytes(b"image")
+    clips = [
+        TimelineClip(MediaType.IMAGE, image, 0, 1_233_333),
+        TimelineClip(MediaType.IMAGE, image, 1_233_333, 1_233_334),
+        TimelineClip(MediaType.IMAGE, image, 2_466_667, 1_233_333),
+    ]
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    timeline = TimelineProject(
+        "fractional", CanvasSpec(360, 640, 12), AudioTrack(audio, 3_700_000), clips
+    )
+    counts = [
+        _timeline_frame_count(timeline, clip, index == len(clips) - 1)
+        for index, clip in enumerate(clips)
+    ]
+    assert counts == [15, 15, 15]
+    assert sum(counts) / timeline.canvas.fps >= 3.7
