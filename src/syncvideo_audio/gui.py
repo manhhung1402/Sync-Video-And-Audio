@@ -299,6 +299,14 @@ class SyncVideoAudioApp(ttk.Frame):
             self.master.iconbitmap(default=str(resource_path("assets/logo.ico")))
         except (OSError, tk.TclError):
             pass
+        try:
+            # Tk uses the PNG fallback reliably even when a Windows build has
+            # trouble decoding an ICO entry. Keep a reference for the lifetime
+            # of the root window so the taskbar icon is not garbage-collected.
+            self.window_icon_image = tk.PhotoImage(file=str(resource_path("assets/logo-64.png")))
+            self.master.iconphoto(True, self.window_icon_image)
+        except (OSError, tk.TclError):
+            self.window_icon_image = None
         self.master.geometry("1180x880")
         self.master.minsize(1000, 760)
         self.grid(sticky="nsew")
