@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import time
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,12 @@ from .capcut_schema import (
 )
 from .manifest import MediaType, TimelineProject
 from .probe import FfprobeMediaProbe, MediaInfo, MediaProbe, ProbeError
-from .runtime import ProgressCallback, report_progress
+from .runtime import (
+    ProgressCallback,
+    hidden_subprocess_kwargs,
+    report_progress,
+    resolve_executable,
+)
 
 
 class CapCutExportError(RuntimeError):
@@ -118,7 +125,10 @@ class CapCutDraftExporter:
             if copy_assets:
                 assets.mkdir(parents=True, exist_ok=True)
                 target = assets / f"{len(unique) + 1:04d}_{source.name}"
-                shutil.copy2(source, target)
+                if source == Path(project.audio.path).resolve() and _wav_needs_normalization(source):
+                    _normalize_wav_for_capcut(source, target)
+                else:
+                    shutil.copy2(source, target)
                 unique[source] = target
                 copied_assets.append(target)
             else:
@@ -239,3 +249,65 @@ def _validate_content_references(content: dict[str, Any]) -> None:
             missing = set(segment["extra_material_refs"]) - material_ids
             if missing:
                 raise CapCutExportError(f"missing extra materials: {sorted(missing)}")
+
+
+def _wav_needs_normalization(source: Path) -> bool:
+    """Return whether a WAV is outside CapCut's broadly supported PCM profile."""
+
+    try:
+        with wave.open(str(source), "rb") as handle:
+            # CapCut Desktop is most reliable with ordinary 16-bit PCM at a
+            # standard video sample rate. TTS WAVs are often 24-bit/24 kHz.
+            return (
+                handle.getcomptype() != "NONE"
+                or handle.getsampwidth() != 2
+                or handle.getframerate() not in {44_100, 48_000}
+                or handle.getnchannels() not in {1, 2}
+            )
+    except (EOFError, OSError, wave.Error):
+        # ``wave`` on older Python versions cannot inspect every valid WAVE
+        # format (notably WAVE_FORMAT_EXTENSIBLE). Detect a RIFF/WAVE header so
+        # those files still go through FFmpeg normalization, while keeping
+        # non-audio test fixtures on the old copy path.
+        try:
+            header = source.read_bytes()[:12]
+        except OSError:
+            return False
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WAVE"
+
+
+def _normalize_wav_for_capcut(source: Path, target: Path) -> None:
+    """Create a conservative PCM WAV copy for CapCut's native audio track."""
+
+    command = [
+        resolve_executable("ffmpeg"),
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source),
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-c:a",
+        "pcm_s16le",
+        str(target),
+    ]
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **hidden_subprocess_kwargs(),
+        )
+    except FileNotFoundError as error:
+        raise CapCutExportError("Không tìm thấy FFmpeg để chuẩn hoá WAV cho CapCut") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "FFmpeg không thể chuẩn hoá WAV").strip()
+        raise CapCutExportError(f"Không thể chuẩn hoá WAV cho CapCut: {detail}") from error
+    if not target.is_file() or target.stat().st_size == 0:
+        raise CapCutExportError("FFmpeg không tạo được file WAV tương thích với CapCut")

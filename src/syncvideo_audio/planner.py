@@ -40,7 +40,15 @@ from .transcription import (
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
-NUMBERED_MEDIA_RE = re.compile(r"^(?:img|vid)-(\d+)(?:-|\.|$)", re.IGNORECASE)
+# Media is commonly exported with one of these prefixes, but users also have
+# folders containing names such as ``001.png`` or ``video_12_final.jpg``.
+# Keep the numeric part separate from the rest of the name so all of those
+# variants follow the same deterministic order.
+NUMBERED_MEDIA_RE = re.compile(
+    r"^(?:(?:img|image|vid|video|clip|scene|shot)[-_ ]*)?(\d+)(?=$|[-_. ])",
+    re.IGNORECASE,
+)
+NATURAL_NUMBER_RE = re.compile(r"(\d+)")
 MOTION_CYCLE = (
     MotionPreset.ZOOM_IN,
     MotionPreset.ZOOM_OUT,
@@ -86,7 +94,13 @@ class SceneSpec:
 
 
 def sort_media(media_dir: str | Path) -> list[Path]:
-    """Return supported media in numeric img-/vid- order, then alphabetically."""
+    """Return supported media in stable human/numeric order.
+
+    Numbered names are placed first (``img-2``, ``video_10``, ``001``), then
+    unnumbered names are sorted naturally so ``scene2`` comes before
+    ``scene10``.  ``Path.iterdir`` does not promise an order on Windows, so
+    every branch includes the full filename as a deterministic tie-breaker.
+    """
 
     root = Path(media_dir)
     if not root.is_dir():
@@ -95,11 +109,11 @@ def sort_media(media_dir: str | Path) -> list[Path]:
     if not files:
         raise FileNotFoundError(f"no supported images or videos found in: {root}")
 
-    def key(path: Path) -> tuple[int, int, str]:
-        match = NUMBERED_MEDIA_RE.match(path.name)
+    def key(path: Path) -> tuple[int, int, tuple[tuple[int, object], ...], str]:
+        match = NUMBERED_MEDIA_RE.match(path.stem)
         if match:
-            return (0, int(match.group(1)), path.name.lower())
-        return (1, 0, path.name.lower())
+            return (0, int(match.group(1)), _natural_name_key(path.name), path.name.casefold())
+        return (1, 0, _natural_name_key(path.name), path.name.casefold())
 
     return sorted(files, key=key)
 
@@ -381,8 +395,8 @@ def _resolve_media(item: Mapping[str, Any], root: Path, media: Sequence[Path], i
 
     number = _scene_number(item, index)
     for path in media:
-        match = NUMBERED_MEDIA_RE.match(path.name)
-        if match and int(match.group(1)) == number:
+        media_number = _media_number(path)
+        if media_number == number:
             return path.resolve()
     if index < len(media):
         return media[index].resolve()
@@ -399,6 +413,21 @@ def _scene_number(item: Mapping[str, Any], index: int) -> int:
 
 def _scene_text(item: Mapping[str, Any]) -> str:
     return str(item.get("sourceText", item.get("source_text", item.get("text", ""))))
+
+
+def _media_number(path: Path) -> int | None:
+    match = NUMBERED_MEDIA_RE.match(path.stem)
+    return int(match.group(1)) if match else None
+
+
+def _natural_name_key(value: str) -> tuple[tuple[int, object], ...]:
+    """Build a comparison key where digit runs are compared numerically."""
+
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.casefold())
+        for part in NATURAL_NUMBER_RE.split(value)
+        if part
+    )
 
 
 def _word_weight(text: str) -> int:

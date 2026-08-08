@@ -59,6 +59,32 @@ def test_sort_media_uses_numeric_prefix_then_alphabetic(tmp_path: Path) -> None:
     ]
 
 
+def test_sort_media_handles_common_numbering_patterns_naturally(tmp_path: Path) -> None:
+    for name in [
+        "video_10-final.mp4",
+        "scene10.jpg",
+        "001-cover.png",
+        "video_2-final.mp4",
+        "img-003-extra.png",
+        "scene2.jpg",
+        "scene-final.jpg",
+        "notes.jpg",
+        "ignored.txt",
+    ]:
+        touch(tmp_path / name)
+
+    assert [path.name for path in sort_media(tmp_path)] == [
+        "001-cover.png",
+        "scene2.jpg",
+        "video_2-final.mp4",
+        "img-003-extra.png",
+        "scene10.jpg",
+        "video_10-final.mp4",
+        "notes.jpg",
+        "scene-final.jpg",
+    ]
+
+
 def test_manual_media_order_is_preserved(tmp_path: Path) -> None:
     audio = touch(tmp_path / "audio.wav")
     media = tmp_path / "media"

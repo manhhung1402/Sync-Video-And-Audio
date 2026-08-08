@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unicodedata
 from dataclasses import dataclass
@@ -100,15 +101,33 @@ class FasterWhisperTranscriber:
         source = Path(audio_path).resolve()
         cache_dir = _whisper_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
-        model_dir = resource_path(f"models/{config.model}")
-        model_source = str(model_dir) if model_dir.is_dir() else config.model
-        report_progress(progress_callback, 0.0, "Đang nạp model Whisper…")
-        model = _faster_whisper.WhisperModel(
-            model_source,
-            device="cpu",
-            compute_type="int8",
-            download_root=str(cache_dir),
+        model_dir = _bundled_whisper_model_dir(config.model)
+        if model_dir is None and getattr(sys, "_MEIPASS", None):
+            raise TranscriptionError(
+                "Bộ cài thiếu model Whisper. Hãy dùng bản cài full có thư mục assets/models."
+            )
+        model_source = str(model_dir) if model_dir is not None else config.model
+        report_progress(progress_callback, 0.01, "Đang kiểm tra model Whisper…")
+        report_progress(
+            progress_callback,
+            0.03,
+            "Đang nạp model Whisper (máy yếu có thể mất vài phút)…",
         )
+        try:
+            model = _faster_whisper.WhisperModel(
+                model_source,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=max(1, min(4, os.cpu_count() or 1)),
+                num_workers=1,
+                download_root=str(cache_dir),
+                local_files_only=model_dir is not None,
+            )
+        except (OSError, RuntimeError, ValueError, MemoryError) as error:
+            raise TranscriptionError(
+                "Không thể nạp model Whisper. Kiểm tra RAM (cần khoảng 1 GB trống), "
+                "quyền truy cập thư mục cài đặt và dùng bản cài full."
+            ) from error
         prompt = re.sub(r"\s+", " ", transcript_hint).strip()[:2000] or None
         segments, _info = model.transcribe(
             str(source),
@@ -482,3 +501,18 @@ def _whisper_cache_dir() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     root = Path(local_app_data) if local_app_data else Path.home() / ".cache"
     return root / "SyncVideo-Audio" / "models"
+
+
+def _bundled_whisper_model_dir(model: str) -> Path | None:
+    """Locate a model shipped inside source trees and PyInstaller bundles."""
+
+    # PyInstaller stores spec ``datas`` under ``assets/``. Keep the legacy
+    # models/ path as a compatibility fallback for older local builds.
+    for relative in (f"assets/models/{model}", f"models/{model}"):
+        candidate = resource_path(relative)
+        if candidate.is_dir() and all(
+            (candidate / filename).is_file()
+            for filename in ("config.json", "model.bin", "tokenizer.json")
+        ):
+            return candidate
+    return None

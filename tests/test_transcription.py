@@ -9,6 +9,7 @@ from syncvideo_audio.transcription import (
     align_transcript_lines,
     load_transcript,
     split_transcript_sentences,
+    _bundled_whisper_model_dir,
 )
 
 
@@ -22,6 +23,14 @@ def test_line_breaks_do_not_create_scenes_without_punctuation(tmp_path: Path) ->
         "Câu thứ nhất vẫn đang tiếp tục.",
         "Câu thứ hai",
     ]
+
+
+def test_finds_the_model_in_the_packaged_assets_directory() -> None:
+    model_dir = _bundled_whisper_model_dir("small")
+
+    assert model_dir is not None
+    assert model_dir.as_posix().endswith("assets/models/small")
+    assert (model_dir / "model.bin").is_file()
 
 
 def test_splits_single_paragraph_into_sentences(tmp_path: Path) -> None:

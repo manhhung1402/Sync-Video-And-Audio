@@ -1,4 +1,6 @@
 import json
+import wave
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from syncvideo_audio import (
     TimelineClip,
     TimelineProject,
 )
+from syncvideo_audio import capcut_exporter as capcut_exporter_module
 
 
 class FakeProbe:
@@ -145,6 +148,42 @@ def test_refuses_to_overwrite_existing_draft(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         exporter.export(project, tmp_path / "drafts")
+
+
+def test_nonstandard_wav_is_marked_for_capcut_normalization(tmp_path: Path) -> None:
+    source = tmp_path / "voice 24bit.wav"
+    with wave.open(str(source), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(3)
+        handle.setframerate(24_000)
+        handle.writeframes(b"\0\0\0" * 24)
+
+    assert capcut_exporter_module._wav_needs_normalization(source)
+
+
+def test_capcut_export_normalizes_nonstandard_wav_before_copying(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "voice 24bit.wav"
+    with wave.open(str(source), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(3)
+        handle.setframerate(24_000)
+        handle.writeframes(b"\0\0\0" * 24)
+
+    called: list[tuple[Path, Path]] = []
+
+    def fake_normalize(input_path: Path, output_path: Path) -> None:
+        called.append((input_path, output_path))
+        output_path.write_bytes(b"normalized wav")
+
+    monkeypatch.setattr(capcut_exporter_module, "_normalize_wav_for_capcut", fake_normalize)
+    project = replace(make_project(tmp_path), audio=AudioTrack(source, 5_000_000, 0.9))
+    result = CapCutDraftExporter(FakeProbe()).export(project, tmp_path / "drafts")
+
+    assert called[0][0] == source.resolve()
+    assert called[0][1].name == "0001_voice 24bit.wav"
+    assert (result.draft_folder / "Resources" / "syncvideo_media" / called[0][1].name).read_bytes() == b"normalized wav"
 
 
 def test_failed_export_removes_staging_directory(tmp_path: Path) -> None:

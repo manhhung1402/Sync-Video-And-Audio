@@ -754,6 +754,14 @@ class SyncVideoAudioApp(ttk.Frame):
         self.progress.grid()
         self.progress.configure(value=0)
         if ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT:
+            # Model construction is not measurable and can take a few minutes
+            # on a CPU-only machine. Keep the UI visibly alive until Whisper
+            # starts yielding timestamp progress.
+            self.progress.configure(mode="indeterminate")
+            self.progress.start(12)
+        else:
+            self.progress.configure(mode="determinate")
+        if ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT:
             self.status_var.set("Whisper đang lấy timestamp và căn transcript…")
         else:
             self.status_var.set("Đang lập timeline và tạo output…")
@@ -859,6 +867,9 @@ class SyncVideoAudioApp(ttk.Frame):
             return
         if kind == "progress":
             value, message = payload
+            if self.progress.cget("mode") == "indeterminate" and "timestamp" in str(message).lower():
+                self.progress.stop()
+                self.progress.configure(mode="determinate")
             self.progress.configure(value=float(value) * 100)
             self.status_var.set(str(message))
             self.after(100, self._poll_events)
