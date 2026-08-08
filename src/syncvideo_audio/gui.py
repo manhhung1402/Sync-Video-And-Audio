@@ -308,13 +308,40 @@ class SyncVideoAudioApp(ttk.Frame):
         except (OSError, tk.TclError):
             self.window_icon_image = None
         self.master.geometry("1180x880")
-        self.master.minsize(1000, 760)
+        self.master.minsize(840, 560)
         self.grid(sticky="nsew")
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
-        self.columnconfigure(0, weight=5, uniform="body")
-        self.columnconfigure(1, weight=6, uniform="body")
-        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.content_canvas = tk.Canvas(
+            self,
+            background=COLORS["background"],
+            borderwidth=0,
+            highlightthickness=0,
+            takefocus=False,
+        )
+        self.content_canvas.grid(row=0, column=0, sticky="nsew")
+        self.content_scrollbar = ttk.Scrollbar(
+            self,
+            orient="vertical",
+            command=self.content_canvas.yview,
+        )
+        self.content_scrollbar.grid(row=0, column=1, sticky="ns", padx=(10, 0))
+        self.content_canvas.configure(yscrollcommand=self.content_scrollbar.set)
+
+        self.content = ttk.Frame(self.content_canvas, style="App.TFrame")
+        self.content.columnconfigure(0, weight=5, uniform="body")
+        self.content.columnconfigure(1, weight=6, uniform="body")
+        self.content_window = self.content_canvas.create_window(
+            (0, 0),
+            window=self.content,
+            anchor="nw",
+        )
+        self.content.bind("<Configure>", self._update_content_scroll_region)
+        self.content_canvas.bind("<Configure>", self._resize_scroll_content)
+        self.master.bind("<MouseWheel>", self._scroll_content, add="+")
 
         self._build_header()
         self._build_project_card()
@@ -323,7 +350,7 @@ class SyncVideoAudioApp(ttk.Frame):
         self._build_action_bar()
 
     def _build_header(self) -> None:
-        header = ttk.Frame(self, style="Header.TFrame")
+        header = ttk.Frame(self.content, style="Header.TFrame")
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
         header.columnconfigure(1, weight=1)
 
@@ -531,7 +558,7 @@ class SyncVideoAudioApp(ttk.Frame):
 
     def _build_action_bar(self) -> None:
         action = ttk.Frame(self, style="Header.TFrame")
-        action.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        action.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         action.columnconfigure(1, weight=1)
 
         status_dot = tk.Label(
@@ -576,7 +603,7 @@ class SyncVideoAudioApp(ttk.Frame):
         padx: tuple[int, int] = (0, 0),
         pady: tuple[int, int] = (0, 0),
     ) -> ttk.Frame:
-        card = ttk.Frame(self, style="Card.TFrame", padding=(18, 13))
+        card = ttk.Frame(self.content, style="Card.TFrame", padding=(18, 13))
         card.grid(
             row=row,
             column=column,
@@ -586,6 +613,25 @@ class SyncVideoAudioApp(ttk.Frame):
             pady=pady,
         )
         return card
+
+    def _update_content_scroll_region(self, _event=None) -> None:
+        bounds = self.content_canvas.bbox(self.content_window)
+        if bounds:
+            self.content_canvas.configure(scrollregion=bounds)
+
+    def _resize_scroll_content(self, event: tk.Event) -> None:
+        self.content_canvas.itemconfigure(self.content_window, width=max(1, event.width))
+
+    def _scroll_content(self, event: tk.Event) -> str | None:
+        # Preserve the media table's own scrolling when the pointer is over it.
+        widget = event.widget
+        if widget is self.media_table or widget.winfo_class() in {"Treeview", "TCombobox"}:
+            return None
+        delta = int(getattr(event, "delta", 0))
+        if not delta:
+            return None
+        self.content_canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+        return "break"
 
     def _field(
         self,
@@ -920,6 +966,8 @@ class SyncVideoAudioApp(ttk.Frame):
 
 def _center_window(root: tk.Tk, width: int = 1180, height: int = 880) -> None:
     root.update_idletasks()
+    width = min(width, max(840, root.winfo_screenwidth() - 48))
+    height = min(height, max(560, root.winfo_screenheight() - 96))
     x = max(0, (root.winfo_screenwidth() - width) // 2)
     y = max(0, (root.winfo_screenheight() - height) // 2)
     root.geometry(f"{width}x{height}+{x}+{y}")

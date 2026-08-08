@@ -46,6 +46,7 @@ The project is designed for predictable hand-off: media order is explicit, trans
 - Automatic project-name collision handling: `Project`, `Project (2)`, `Project (3)`, …
 - Determinate progress reporting for transcription, rendering, asset copy and CapCut export.
 - Windows GUI with no black child-console windows.
+- Scrollable compact-window layout with the progress and create-project actions always visible.
 - WAV voice tracks are probed with a stream-duration fallback; non-standard WAV files are normalized to 48 kHz, 16-bit PCM when copied into a CapCut draft.
 - Atomic CapCut draft export with copied local assets and registry hand-off.
 - Three output modes: `mp4`, `capcut`, and `both`.
