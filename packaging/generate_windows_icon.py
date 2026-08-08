@@ -45,7 +45,10 @@ def dib_entry(image: Image.Image, size: int) -> bytes:
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
-    source = Image.open(root / "assets" / "logo.png")
+    source = Image.open(root / "assets" / "logo.png").convert("RGBA")
+    background = Image.new("RGBA", source.size, (25, 211, 197, 255))
+    source = Image.alpha_composite(background, source)
+    source.resize((64, 64), Image.Resampling.LANCZOS).save(root / "assets" / "logo-taskbar.png")
     entries = [dib_entry(source, size) for size in SIZES]
     directory_size = 6 + 16 * len(entries)
     offset = directory_size

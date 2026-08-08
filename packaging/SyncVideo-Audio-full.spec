@@ -4,6 +4,7 @@ hiddenimports = []
 datas = [
     ("../assets/logo.png", "assets"),
     ("../assets/logo-64.png", "assets"),
+    ("../assets/logo-taskbar.png", "assets"),
     ("../assets/logo.ico", "assets"),
     ("../assets/fonts/NotoSansCJK-Regular.ttc", "assets/fonts"),
     ("../assets/fonts/OFL-1.1.txt", "licenses"),

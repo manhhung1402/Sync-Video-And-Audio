@@ -303,7 +303,7 @@ class SyncVideoAudioApp(ttk.Frame):
             # Tk uses the PNG fallback reliably even when a Windows build has
             # trouble decoding an ICO entry. Keep a reference for the lifetime
             # of the root window so the taskbar icon is not garbage-collected.
-            self.window_icon_image = tk.PhotoImage(file=str(resource_path("assets/logo-64.png")))
+            self.window_icon_image = tk.PhotoImage(file=str(resource_path("assets/logo-taskbar.png")))
             self.master.iconphoto(True, self.window_icon_image)
         except (OSError, tk.TclError):
             self.window_icon_image = None
@@ -926,10 +926,24 @@ def _center_window(root: tk.Tk, width: int = 1180, height: int = 880) -> None:
 
 
 def launch() -> None:
+    _set_windows_app_user_model_id()
     root = tk.Tk()
     SyncVideoAudioApp(root)
     _center_window(root)
     root.mainloop()
+
+
+def _set_windows_app_user_model_id() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "YudgnuH.SyncVideoAudio"
+        )
+    except (AttributeError, OSError):
+        pass
 
 
 if __name__ == "__main__":

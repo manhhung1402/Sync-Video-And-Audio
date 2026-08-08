@@ -15,12 +15,14 @@ from typing import Any
 from .capcut_keyframes import MotionSettings, apply_motion_keyframes
 from .capcut_schema import (
     add_audio,
+    add_caption,
     add_visual_clip,
     capcut_id,
     make_content,
     make_meta,
     make_timeline_project,
     make_track,
+    make_text_track,
 )
 from .manifest import MediaType, TimelineProject
 from .probe import FfprobeMediaProbe, MediaInfo, MediaProbe, ProbeError
@@ -157,6 +159,12 @@ class CapCutDraftExporter:
             visual_segments.append(segment)
         if visual_segments:
             content["tracks"].append(make_track("video", visual_segments))
+        if project.captions:
+            text_segments = [
+                add_caption(content, caption, index)
+                for index, caption in enumerate(project.captions)
+            ]
+            content["tracks"].append(make_text_track(text_segments))
         audio_segment = add_audio(content, project, asset_paths[project.audio.path.resolve()])
         content["tracks"].append(make_track("audio", [audio_segment]))
         return content

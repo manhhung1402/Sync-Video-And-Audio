@@ -40,6 +40,7 @@ The project is designed for predictable hand-off: media order is explicit, trans
 - Sentence splitting by punctuation, not by line breaks. Latin punctuation and CJK punctuation (`。`, `！`, `？`, `｡`, `．`, `…`) are supported.
 - Local `faster-whisper` transcription with Vietnamese, Japanese, Korean, Chinese and other Whisper languages.
 - Optional hard-burn captions in the MP4 preview with bundled Noto Sans CJK font support.
+- Editable subtitle text layers are also written into the native CapCut draft.
 - Gentle zoom/pan motion with CapCut keyframes for images and videos.
 - Automatic project-name collision handling: `Project`, `Project (2)`, `Project (3)`, …
 - Determinate progress reporting for transcription, rendering, asset copy and CapCut export.
@@ -73,7 +74,7 @@ Supported input formats are `.txt`, `.srt`, and `.json`. JSON may contain `text`
 
 The planner stores captions and their time ranges in `*.timeline.json`. When **Burn caption vào MP4 preview** is enabled, FFmpeg renders those captions permanently into the preview video using ASS subtitles and the bundled CJK font.
 
-The native CapCut draft currently contains the visual/audio timeline, motion keyframes, and copied assets. It does not automatically create a native CapCut text track yet; use the manifest timings or the burned preview as the caption reference when continuing the edit in CapCut.
+The native CapCut draft contains the visual/audio timeline, motion keyframes, copied assets, and an editable text track for each caption. The MP4 burn-in option remains separate and permanently renders the same captions into the preview.
 
 ## Requirements
 
@@ -252,7 +253,7 @@ Never overwrite a draft that is open in CapCut. Keep the `*.timeline.json` manif
 
 - CapCut's native schema is undocumented and may change between versions.
 - Transcript alignment is order-based; it is not semantic image/video matching.
-- Native CapCut text-track generation is not implemented yet.
+- CapCut's native schema is private; text styling may need adjustment after opening the draft in a newer CapCut version.
 - The full installer is Windows-only.
 
 ## Contributing
@@ -274,4 +275,4 @@ Author: **YudgnuH (Nguyễn Duy Hưng)**
 
 ## Tóm tắt tiếng Việt
 
-SyncVideo-Audio là công cụ Windows tạo preview MP4 và project CapCut native từ audio thuyết minh cùng danh sách ảnh/video có thứ tự. Có hai chế độ: chia đều thời lượng hoặc căn timestamp bằng transcript + Whisper. Caption có thể burn cố định vào MP4; draft CapCut hiện chưa tự tạo text track native. Dự án dùng MIT License cho code và logo, còn FFmpeg/model/font tuân theo license riêng được ghi trong [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+SyncVideo-Audio là công cụ Windows tạo preview MP4 và project CapCut native từ audio thuyết minh cùng danh sách ảnh/video có thứ tự. Có hai chế độ: chia đều thời lượng hoặc căn timestamp bằng transcript + Whisper. Caption có thể burn cố định vào MP4 và được xuất thành text track editable trong draft CapCut. Dự án dùng MIT License cho code và logo, còn FFmpeg/model/font tuân theo license riêng được ghi trong [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

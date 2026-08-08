@@ -12,6 +12,7 @@ from syncvideo_audio import (
     MediaInfo,
     MediaType,
     MotionPreset,
+    TimelineCaption,
     TimelineClip,
     TimelineProject,
 )
@@ -139,6 +140,29 @@ def test_content_has_editable_tracks_and_resolved_materials(tmp_path: Path) -> N
     asset_paths = [Path(item["path"]) for item in content["materials"]["videos"]]
     asset_paths += [Path(content["materials"]["audios"][0]["path"])]
     assert all(path.is_absolute() and path.is_file() for path in asset_paths)
+
+
+def test_exports_captions_as_editable_capcut_text_track(tmp_path: Path) -> None:
+    project = replace(
+        make_project(tmp_path),
+        captions=[
+            TimelineCaption("Xin chào CapCut", 0, 2_000_000),
+            TimelineCaption("字幕テスト", 2_000_000, 3_000_000),
+        ],
+    )
+    result = CapCutDraftExporter(FakeProbe()).export(project, tmp_path / "drafts")
+    content = json.loads((result.draft_folder / "draft_content.json").read_text(encoding="utf-8"))
+
+    assert [track["type"] for track in content["tracks"]] == ["video", "text", "audio"]
+    text_materials = content["materials"]["texts"]
+    assert [item["recognize_text"] for item in text_materials] == ["Xin chào CapCut", "字幕テスト"]
+    text_track = content["tracks"][1]
+    assert [segment["target_timerange"] for segment in text_track["segments"]] == [
+        {"start": 0, "duration": 2_000_000},
+        {"start": 2_000_000, "duration": 3_000_000},
+    ]
+    assert all(segment["source_timerange"] is None for segment in text_track["segments"])
+    assert all(segment["extra_material_refs"] for segment in text_track["segments"])
 
 
 def test_refuses_to_overwrite_existing_draft(tmp_path: Path) -> None:
