@@ -1,5 +1,5 @@
 #define MyAppName "SyncVideo-Audio"
-#define MyAppVersion "0.1.4"
+#define MyAppVersion "0.1.5"
 #define MyAppPublisher "YudgnuH (Nguyễn Duy Hưng)"
 #define MyAppExeName "SyncVideo-Audio.exe"
 
@@ -16,9 +16,16 @@ SetupIconFile=..\assets\logo.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
+UseSetupLdr=no
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=lowest
+
+[Dirs]
+Name: "{app}\data"
+Name: "{app}\data\temp"
+Name: "{app}\data\cache"
+Name: "{app}\data\models"
 
 [Files]
 Source: "..\dist-full\SyncVideo-Audio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

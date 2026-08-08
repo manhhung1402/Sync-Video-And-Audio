@@ -5,11 +5,59 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Callable
 
 
 ProgressCallback = Callable[[float, str], None]
+
+
+def app_data_root() -> Path:
+    """Return writable app storage on the same drive as the packaged app.
+
+    ``SYNCVIDEO_DATA_DIR`` is primarily useful for the source/CLI build.  A
+    packaged onedir build keeps its data beside the executable so choosing a
+    non-system install drive also keeps caches and temporary files there.
+    """
+
+    override = os.environ.get("SYNCVIDEO_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "data"
+    return Path(__file__).resolve().parents[2] / ".runtime"
+
+
+def runtime_temp_dir() -> Path:
+    return app_data_root() / "temp"
+
+
+def configure_runtime_storage() -> Path:
+    """Keep Python and dependency caches out of Windows' TEMP/AppData paths."""
+
+    data_root = app_data_root()
+    temporary = data_root / "temp"
+    cache = data_root / "cache"
+    models = data_root / "models"
+    for directory in (temporary, cache, models):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    # tempfile honours these variables, while assigning ``tempdir`` also
+    # handles processes where another imported module already queried it.
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        os.environ[name] = str(temporary)
+    tempfile.tempdir = str(temporary)
+
+    # Libraries used by Whisper/Hugging Face otherwise default to AppData or
+    # the user profile on C:.  Keep all optional downloads on the install drive.
+    os.environ["HF_HOME"] = str(cache / "huggingface")
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(cache / "huggingface" / "hub")
+    os.environ["XDG_CACHE_HOME"] = str(cache)
+    os.environ["TORCH_HOME"] = str(cache / "torch")
+    os.environ["SYNCVIDEO_MODEL_DIR"] = str(models)
+    return data_root
 
 
 def report_progress(callback: ProgressCallback | None, value: float, message: str) -> None:

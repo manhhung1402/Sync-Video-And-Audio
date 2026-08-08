@@ -39,6 +39,7 @@ The project is designed for predictable hand-off: media order is explicit, trans
 - Equal-duration synchronization or transcript-guided timestamp alignment.
 - Sentence splitting by punctuation, not by line breaks. Latin punctuation and CJK punctuation (`。`, `！`, `？`, `｡`, `．`, `…`) are supported.
 - Local `faster-whisper` transcription with Vietnamese, Japanese, Korean, Chinese and other Whisper languages.
+- Keeps app caches and temporary processing files under `data/` on the selected install drive instead of `%TEMP%` or `%LOCALAPPDATA%` on C:.
 - Optional hard-burn captions in the MP4 preview with bundled Noto Sans CJK font support.
 - Editable subtitle text layers are also written into the native CapCut draft.
 - Gentle zoom/pan motion with CapCut keyframes for images and videos.
@@ -92,12 +93,15 @@ The customer installer bundles Python runtime, FFmpeg/FFprobe, the `small` Whisp
 
 Download the latest Windows installer from the [Releases](https://github.com/yudgunH/SyncVideo-Audio/releases) page:
 
-1. Run `SyncVideo-Audio-Setup-<version>.exe`.
-2. Keep the default installation directory or choose another one.
-3. Launch **SyncVideo-Audio** from the Start menu or desktop shortcut.
-4. Install CapCut Desktop separately if native draft registration is required.
+1. Download every `SyncVideo-Audio-Setup-<version>*` installer part into the same folder.
+2. Run `SyncVideo-Audio-Setup-<version>.exe` from that folder.
+3. Choose a directory on D:, G:, or another drive if C: is short on space.
+4. Launch **SyncVideo-Audio** from the Start menu or desktop shortcut.
+5. Install CapCut Desktop separately if native draft registration is required.
 
-The installer includes the application runtime, FFmpeg/FFprobe, Whisper `small` model and CJK font. No Python installation or terminal command is required for normal customer use.
+The installer includes the application runtime, FFmpeg/FFprobe, Whisper `small` model and CJK font. No Python installation or terminal command is required for normal customer use. The multipart installer runs directly without copying its large payload into Windows `%TEMP%`.
+
+After installation, the application stores its own temporary files and dependency caches in `data/` beside the installed executable. Rendering intermediates remain beside the selected output. It does not use `%TEMP%` or `%LOCALAPPDATA%\SyncVideo-Audio`; CapCut may still maintain its own cache independently.
 
 ## Install for development
 
@@ -209,7 +213,7 @@ assets/tools/ffprobe.exe
 The generated files are:
 
 - `dist-full/SyncVideo-Audio/` — portable onedir payload;
-- `dist-installer/SyncVideo-Audio-Setup-<version>.exe` — customer installer.
+- `dist-installer/SyncVideo-Audio-Setup-<version>.exe` and its `.bin` parts — customer installer. Keep all parts together.
 
 The large model and executable assets are intentionally ignored by Git. Keep them in the release/build environment and publish checksums for downloadable binaries.
 
@@ -219,7 +223,7 @@ Before publishing a GitHub release:
 
 1. Run `python -m pytest` and `git diff --check`.
 2. Build `dist-full/SyncVideo-Audio/` and smoke-test the EXE on a clean Windows account.
-3. Build `dist-installer/SyncVideo-Audio-Setup-<version>.exe` with Inno Setup.
+3. Build the multipart `dist-installer/SyncVideo-Audio-Setup-<version>*` set with Inno Setup.
 4. Create an annotated tag such as `v0.1.1` and upload the installer as a release asset.
 5. Publish SHA-256 checksums for the installer and portable payload.
 

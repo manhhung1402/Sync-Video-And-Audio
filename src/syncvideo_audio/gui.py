@@ -13,7 +13,7 @@ from .capcut_registry import CapCutRegistry
 from .manifest import CanvasSpec, seconds_to_us
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
 from .planner import AlignmentMode, PlannerConfig, build_timeline, sort_media
-from .runtime import resolve_executable, resource_path
+from .runtime import configure_runtime_storage, resolve_executable, resource_path
 from .transcription import WhisperConfig
 
 
@@ -926,6 +926,7 @@ def _center_window(root: tk.Tk, width: int = 1180, height: int = 880) -> None:
 
 
 def launch() -> None:
+    configure_runtime_storage()
     _set_windows_app_user_model_id()
     root = tk.Tk()
     SyncVideoAudioApp(root)

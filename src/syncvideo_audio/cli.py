@@ -10,6 +10,7 @@ from pathlib import Path
 from .manifest import CanvasSpec, TimelineProject, seconds_to_us
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
 from .planner import AlignmentMode, PlannerConfig, build_timeline
+from .runtime import configure_runtime_storage
 from .transcription import WhisperConfig
 
 
@@ -56,6 +57,7 @@ def _add_output_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_runtime_storage()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

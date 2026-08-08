@@ -22,10 +22,12 @@ from typing import Any, Protocol, Sequence
 from .manifest import seconds_to_us
 from .runtime import (
     ProgressCallback,
+    app_data_root,
     hidden_subprocess_kwargs,
     report_progress,
     resolve_executable,
     resource_path,
+    runtime_temp_dir,
 )
 
 try:
@@ -185,7 +187,12 @@ class WhisperCliTranscriber:
                 "Không tìm thấy Whisper CLI. Cài bằng: pip install openai-whisper"
             )
         source = Path(audio_path).resolve()
-        with tempfile.TemporaryDirectory(prefix="syncvideo-whisper-") as temporary_name:
+        whisper_temp_root = runtime_temp_dir() / "whisper"
+        whisper_temp_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="syncvideo-whisper-",
+            dir=whisper_temp_root,
+        ) as temporary_name:
             temporary = Path(temporary_name)
             command = [
                 executable,
@@ -498,9 +505,8 @@ def _normalize_language(language: str) -> str:
 
 
 def _whisper_cache_dir() -> Path:
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    root = Path(local_app_data) if local_app_data else Path.home() / ".cache"
-    return root / "SyncVideo-Audio" / "models"
+    override = os.environ.get("SYNCVIDEO_MODEL_DIR")
+    return Path(override).resolve() if override else app_data_root() / "models"
 
 
 def _bundled_whisper_model_dir(model: str) -> Path | None:
