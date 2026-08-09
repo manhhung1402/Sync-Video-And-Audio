@@ -11,6 +11,7 @@ from syncvideo_audio import (
     MotionPreset,
     PlannerConfig,
     build_timeline,
+    inspect_media_numbering,
     seconds_to_us,
     sort_media,
 )
@@ -85,6 +86,21 @@ def test_sort_media_handles_common_numbering_patterns_naturally(tmp_path: Path) 
     ]
 
 
+def test_inspect_media_numbering_finds_gaps_and_duplicates() -> None:
+    report = inspect_media_numbering(
+        [
+            Path("img-001.png"),
+            Path("video_002.mp4"),
+            Path("img-002-alt.png"),
+            Path("scene-004.jpg"),
+        ]
+    )
+
+    assert report.missing_numbers == (3,)
+    assert report.duplicate_numbers == (2,)
+    assert report.fully_numbered is True
+
+
 def test_manual_media_order_is_preserved(tmp_path: Path) -> None:
     audio = touch(tmp_path / "audio.wav")
     media = tmp_path / "media"
@@ -156,6 +172,55 @@ def test_transcript_mode_requires_one_sentence_per_media(tmp_path: Path) -> None
             transcriber=FakeTranscriber([]),
             probe=FakeProbe({"audio.wav": 3}),
         )
+
+
+def test_transcript_mode_reports_exact_sentences_missing_numbered_media(
+    tmp_path: Path,
+) -> None:
+    audio = touch(tmp_path / "audio.wav")
+    media = tmp_path / "media"
+    media.mkdir()
+    for name in ("img-001.png", "img-002.png", "img-004.png", "img-005.png"):
+        touch(media / name)
+    transcriber = FakeTranscriber([])
+
+    with pytest.raises(ValueError) as captured:
+        build_timeline(
+            project_name="missing-numbered-media",
+            audio_path=audio,
+            media_dir=media,
+            alignment_mode=AlignmentMode.TRANSCRIPT,
+            transcript_text="Câu một. Câu hai. Câu ba. Câu bốn.",
+            transcriber=transcriber,
+            probe=FakeProbe({"audio.wav": 4}),
+        )
+
+    message = str(captured.value)
+    assert 'Câu 003: "Câu ba."' in message
+    assert "Số 005: img-005.png" in message
+    assert transcriber.calls == []
+
+
+def test_transcript_mode_lists_unmatched_tail_sentences_without_numbered_names(
+    tmp_path: Path,
+) -> None:
+    audio = touch(tmp_path / "audio.wav")
+    media = tmp_path / "media"
+    media.mkdir()
+    touch(media / "opening.png")
+
+    with pytest.raises(ValueError) as captured:
+        build_timeline(
+            project_name="missing-tail-media",
+            audio_path=audio,
+            media_dir=media,
+            alignment_mode=AlignmentMode.TRANSCRIPT,
+            transcript_text="Mở đầu. Nội dung sau.",
+            transcriber=FakeTranscriber([]),
+            probe=FakeProbe({"audio.wav": 2}),
+        )
+
+    assert 'Câu 002: "Nội dung sau."' in str(captured.value)
 
 
 def test_transcript_mode_accepts_pasted_text_and_splits_on_punctuation(tmp_path: Path) -> None:

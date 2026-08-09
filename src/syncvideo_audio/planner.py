@@ -65,6 +65,20 @@ class AlignmentMode(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class MediaNumberingReport:
+    """Numbering information recovered from ordered media filenames."""
+
+    numbered_paths: tuple[tuple[int, tuple[Path, ...]], ...]
+    unnumbered_paths: tuple[Path, ...]
+    missing_numbers: tuple[int, ...]
+    duplicate_numbers: tuple[int, ...]
+
+    @property
+    def fully_numbered(self) -> bool:
+        return bool(self.numbered_paths) and not self.unnumbered_paths
+
+
+@dataclass(frozen=True, slots=True)
 class PlannerConfig:
     canvas: CanvasSpec = CanvasSpec()
     image_shot_duration_us: int = seconds_to_us(6.0)
@@ -116,6 +130,32 @@ def sort_media(media_dir: str | Path) -> list[Path]:
         return (1, 0, _natural_name_key(path.name), path.name.casefold())
 
     return sorted(files, key=key)
+
+
+def inspect_media_numbering(media: Sequence[str | Path]) -> MediaNumberingReport:
+    """Find missing/duplicate scene numbers encoded in media filenames."""
+
+    grouped: dict[int, list[Path]] = {}
+    unnumbered: list[Path] = []
+    for value in media:
+        path = Path(value)
+        number = _media_number(path)
+        if number is None:
+            unnumbered.append(path)
+        else:
+            grouped.setdefault(number, []).append(path)
+    positive_numbers = {number for number in grouped if number > 0}
+    maximum = max(positive_numbers, default=0)
+    missing = tuple(number for number in range(1, maximum + 1) if number not in grouped)
+    duplicates = tuple(sorted(number for number, paths in grouped.items() if len(paths) > 1))
+    return MediaNumberingReport(
+        numbered_paths=tuple(
+            (number, tuple(paths)) for number, paths in sorted(grouped.items())
+        ),
+        unnumbered_paths=tuple(unnumbered),
+        missing_numbers=missing,
+        duplicate_numbers=duplicates,
+    )
 
 
 def load_scene_mapping(
@@ -225,12 +265,7 @@ def build_timeline(
                 if transcript_path is not None
                 else split_transcript_sentences(transcript_text or "")
             )
-            if len(transcript_lines) != len(media):
-                raise ValueError(
-                    f"transcript có {len(transcript_lines)} câu nhưng media có {len(media)} file; "
-                    "cần đúng một câu được tách theo dấu kết câu cho mỗi file "
-                    "theo thứ tự đánh số"
-                )
+            _validate_transcript_media_pairing(transcript_lines, media)
             timestamp_words = (transcriber or default_transcriber()).transcribe(
                 audio,
                 transcript_hint="\n".join(transcript_lines),
@@ -418,6 +453,68 @@ def _scene_text(item: Mapping[str, Any]) -> str:
 def _media_number(path: Path) -> int | None:
     match = NUMBERED_MEDIA_RE.match(path.stem)
     return int(match.group(1)) if match else None
+
+
+def _validate_transcript_media_pairing(
+    transcript_lines: Sequence[str],
+    media: Sequence[Path],
+) -> None:
+    report = inspect_media_numbering(media)
+    common = (
+        f"transcript có {len(transcript_lines)} câu nhưng media có {len(media)} file; "
+        "cần đúng một câu được tách theo dấu kết câu cho mỗi file theo thứ tự đánh số"
+    )
+
+    if report.fully_numbered:
+        numbered = {number: paths for number, paths in report.numbered_paths}
+        expected = set(range(1, len(transcript_lines) + 1))
+        missing = sorted(expected - set(numbered))
+        extras = sorted(set(numbered) - expected)
+        duplicates = sorted(
+            number for number, paths in report.numbered_paths if len(paths) > 1
+        )
+        if missing or extras or duplicates or len(media) != len(transcript_lines):
+            details: list[str] = [common]
+            if missing:
+                details.append("\nThiếu hình cho các câu:")
+                details.extend(
+                    f'- Câu {number:03d}: "{_preview_sentence(transcript_lines[number - 1])}"'
+                    for number in missing
+                )
+            if duplicates:
+                details.append("\nTrùng số trong tên file:")
+                for number in duplicates:
+                    names = ", ".join(path.name for path in numbered[number])
+                    details.append(f"- Số {number:03d}: {names}")
+            if extras:
+                details.append("\nMedia không có câu thuyết minh tương ứng:")
+                for number in extras:
+                    names = ", ".join(path.name for path in numbered[number])
+                    details.append(f"- Số {number:03d}: {names}")
+            raise ValueError("\n".join(details))
+        return
+
+    if len(transcript_lines) != len(media):
+        details = [common]
+        if not report.numbered_paths and len(transcript_lines) > len(media):
+            details.append("\nCác câu chưa có media ở cuối danh sách:")
+            details.extend(
+                f'- Câu {number:03d}: "{_preview_sentence(transcript_lines[number - 1])}"'
+                for number in range(len(media) + 1, len(transcript_lines) + 1)
+            )
+        elif report.unnumbered_paths:
+            names = ", ".join(path.name for path in report.unnumbered_paths[:8])
+            suffix = "…" if len(report.unnumbered_paths) > 8 else ""
+            details.append(
+                "\nKhông thể xác định chính xác câu bị thiếu vì một số file không có "
+                f"số thứ tự ở đầu tên: {names}{suffix}"
+            )
+        raise ValueError("\n".join(details))
+
+
+def _preview_sentence(text: str, limit: int = 120) -> str:
+    normalized = re.sub(r"\s+", " ", text).strip()
+    return normalized if len(normalized) <= limit else normalized[: limit - 1].rstrip() + "…"
 
 
 def _natural_name_key(value: str) -> tuple[tuple[int, object], ...]:

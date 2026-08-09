@@ -38,6 +38,7 @@ The project is designed for predictable hand-off: media order is explicit, trans
 
 - Equal-duration synchronization or transcript-guided timestamp alignment.
 - Sentence splitting by punctuation, not by line breaks. Latin punctuation and CJK punctuation (`。`, `！`, `？`, `｡`, `．`, `…`) are supported.
+- Detects missing or duplicate scene numbers in media filenames and identifies the exact transcript sentences that have no matching image/video.
 - Local `faster-whisper` transcription with Vietnamese, Japanese, Korean, Chinese and other Whisper languages.
 - Keeps app caches and temporary processing files under `data/` on the selected install drive instead of `%TEMP%` or `%LOCALAPPDATA%` on C:.
 - Optional hard-burn captions in the MP4 preview with bundled Noto Sans CJK font support.

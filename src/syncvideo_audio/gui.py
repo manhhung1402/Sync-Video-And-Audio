@@ -12,7 +12,13 @@ from tkinter import filedialog, messagebox, ttk
 from .capcut_registry import CapCutRegistry
 from .manifest import CanvasSpec, seconds_to_us
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
-from .planner import AlignmentMode, PlannerConfig, build_timeline, sort_media
+from .planner import (
+    AlignmentMode,
+    PlannerConfig,
+    build_timeline,
+    inspect_media_numbering,
+    sort_media,
+)
 from .runtime import configure_runtime_storage, resolve_executable, resource_path
 from .transcription import WhisperConfig
 
@@ -117,6 +123,12 @@ class SyncVideoAudioApp(ttk.Frame):
             background=COLORS["surface"],
             foreground=COLORS["muted"],
             font=("Segoe UI", 9),
+        )
+        style.configure(
+            "CardWarning.TLabel",
+            background=COLORS["surface"],
+            foreground=COLORS["warning"],
+            font=("Segoe UI Semibold", 9),
         )
         style.configure(
             "Field.TLabel",
@@ -291,6 +303,7 @@ class SyncVideoAudioApp(ttk.Frame):
         self.register_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Sẵn sàng để tạo project")
         self.media_count_var = tk.StringVar(value="Chưa có media")
+        self.media_warning_var = tk.StringVar()
         self.runtime_var = tk.StringVar(value="Đang kiểm tra CapCut…")
 
     def _build_ui(self) -> None:
@@ -484,6 +497,14 @@ class SyncVideoAudioApp(ttk.Frame):
             style="Ghost.TButton",
             command=self._reload_media,
         ).grid(row=0, column=2, sticky="w", padx=(8, 0))
+        self.media_warning_label = ttk.Label(
+            card,
+            textvariable=self.media_warning_var,
+            style="CardWarning.TLabel",
+            wraplength=480,
+        )
+        self.media_warning_label.grid(row=5, column=0, sticky="ew", pady=(9, 0))
+        self.media_warning_label.grid_remove()
 
     def _build_export_card(self) -> None:
         card = self._card(2, 0, columnspan=2, pady=(14, 0))
@@ -748,6 +769,21 @@ class SyncVideoAudioApp(ttk.Frame):
             )
         count = len(self.media_paths)
         self.media_count_var.set(f"{count} media" if count else "Chưa có media")
+        report = inspect_media_numbering(self.media_paths)
+        warnings: list[str] = []
+        if report.missing_numbers:
+            values = ", ".join(f"{number:03d}" for number in report.missing_numbers[:12])
+            if len(report.missing_numbers) > 12:
+                values += ", …"
+            warnings.append(f"Thiếu số file: {values}")
+        if report.duplicate_numbers:
+            values = ", ".join(f"{number:03d}" for number in report.duplicate_numbers[:12])
+            warnings.append(f"Trùng số file: {values}")
+        self.media_warning_var.set("  ·  ".join(warnings))
+        if warnings:
+            self.media_warning_label.grid()
+        else:
+            self.media_warning_label.grid_remove()
         if selected_index is not None and 0 <= selected_index < count:
             item = str(selected_index)
             self.media_table.selection_set(item)
