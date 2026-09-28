@@ -38,6 +38,10 @@ except ImportError:
 
 SENTENCE_TERMINATORS = frozenset(".!?…。｡．！？")
 SENTENCE_CLOSERS = frozenset("\"'”’»」』】〉》〕〗〙〛)]}")
+# SRT allows either a comma or a dot before the milliseconds.
+_SRT_TIMESTAMP = re.compile(
+    r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d+):(\d{2}):(\d{2})[,.](\d{1,3})"
+)
 
 
 class TranscriptionError(RuntimeError):
@@ -69,6 +73,10 @@ class AlignedTranscriptLine:
     text: str
     start_us: int
     duration_us: int
+    # Per-token (start_us, end_us) stamps owned by this line, in reading order.
+    # Empty when no word-level source was available; consumers then fall back to
+    # proportional timing.
+    word_times: tuple[tuple[int, int], ...] = ()
 
     @property
     def end_us(self) -> int:
@@ -248,8 +256,16 @@ class WhisperCliTranscriber:
         return words
 
 
-def load_transcript(path: str | Path) -> list[str]:
-    """Load TXT, SRT, or JSON and split scenes only at sentence punctuation."""
+def is_meaningful_sentence(text: str) -> bool:
+    """Return True if text has at least one alphanumeric character.
+
+    Rejects lines made of punctuation or symbols only (e.g. "...", "---", "!?").
+    """
+    return any(c.isalnum() for c in text)
+
+
+def load_transcript(path: str | Path, *, split_by_punctuation: bool = True) -> list[str]:
+    """Load TXT, SRT, or JSON and split scenes into meaningful sentences."""
 
     source = Path(path)
     if not source.is_file():
@@ -260,43 +276,170 @@ def load_transcript(path: str | Path) -> list[str]:
         text = " ".join(_json_transcript_texts(json.loads(text)))
     elif suffix == ".srt":
         text = _srt_transcript_text(text)
-    return split_transcript_sentences(text)
+    return split_transcript_sentences(text, split_by_punctuation=split_by_punctuation)
 
 
-def split_transcript_sentences(text: str) -> list[str]:
-    """Split transcript by multilingual terminators, never by line breaks alone."""
+def load_srt_timestamps(path: str | Path) -> list[TimedWord]:
+    """Read SRT cue times so Whisper does not have to run.
 
-    normalized = re.sub(r"\s+", " ", text).strip()
-    if not normalized:
-        raise ValueError("transcript không có câu nào")
+    The cue text is carried as the ``TimedWord`` text and the cue start/end as
+    its stamps. Only the timing comes from this file: the sentences still come
+    from the transcript/script, so splitting and media pairing are unchanged.
+    """
 
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"SRT không tồn tại: {source}")
+    text = source.read_text(encoding="utf-8-sig", errors="replace")
+    words: list[TimedWord] = []
+    for block in re.split(r"\r?\n\s*\r?\n", text.strip()):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        timing_index = next(
+            (index for index, line in enumerate(lines) if "-->" in line), None
+        )
+        if timing_index is None:
+            continue
+        match = _SRT_TIMESTAMP.search(lines[timing_index])
+        if match is None:
+            continue
+        start_us = _srt_timestamp_us(*match.group(1, 2, 3, 4))
+        end_us = _srt_timestamp_us(*match.group(5, 6, 7, 8))
+        cue = " ".join(
+            line
+            for index, line in enumerate(lines)
+            if index != timing_index and not line.isdigit() and "-->" not in line
+        )
+        if end_us > start_us and is_meaningful_sentence(cue):
+            words.append(TimedWord(cue.strip(), start_us, end_us))
+    if not words:
+        raise TranscriptionError(f"SRT không có câu phụ đề hợp lệ: {source}")
+    return words
+
+
+def correct_srt_spelling(
+    cues: Sequence[TimedWord],
+    transcript_lines: Sequence[str],
+) -> list[TimedWord]:
+    """Viết lại chữ trong cue SRT theo chuẩn transcript, giữ nguyên mọi timestamp.
+
+    ``cues`` là output của :func:`load_srt_timestamps` (mỗi cue là một
+    ``TimedWord`` mang nguyên văn chữ của SRT). Transcript là nguồn chuẩn về
+    chính tả: cue nào khớp 100% thì giữ nguyên, cue nào có từ sai (Whisper/CapCut
+    nghe nhầm, thiếu dấu, viết liền,…) thì chỉ thay *từ* đó bằng từ transcript ở
+    vị trí tương ứng.
+
+    Timestamp của cue **không bao giờ bị sửa** — mọi cảnh bắt buộc phải nằm trên
+    đúng mốc lời thoại mà file SRT đã căn sẵn. Vì vậy cue nào transcript không
+    khớp được thì giữ nguyên chữ SRT thay vì đoán.
+    """
+    if not cues or not transcript_lines:
+        return list(cues)
+
+    # Transcript là chuẩn chính tả. Mỗi từ ghi cả dạng đã chuẩn hoá (để so
+    # khớp) lẫn dạng gốc (để ghi lại, giữ hoa thường của script).
+    reference: list[str] = []
+    surfaces: list[str] = []
+    for line in transcript_lines:
+        for word in line.split():
+            tokens = _tokens(word)
+            if not tokens:
+                continue
+            for token in tokens:
+                reference.append(token)
+                surfaces.append(word if len(tokens) == 1 else token)
+    if not reference:
+        return list(cues)
+
+    srt_tokens: list[str] = []
+    for cue in cues:
+        srt_tokens.extend(_tokens(cue.text))
+    if not srt_tokens:
+        return list(cues)
+
+    # reference_for_srt[i] = chữ transcript chuẩn cho token SRT thứ i, hoặc None
+    # khi transcript không khớp token đó (giữ nguyên chữ SRT ở vị trí đó).
+    reference_for_srt: list[str | None] = [None] * len(srt_tokens)
+    for block in SequenceMatcher(
+        a=reference, b=srt_tokens, autojunk=False
+    ).get_matching_blocks():
+        for offset in range(block.size):
+            reference_for_srt[block.b + offset] = surfaces[block.a + offset]
+
+    # Dựng lại từng cue: thay chữ sai, giữ nguyên chữ đúng và dấu câu gốc.
+    corrected: list[TimedWord] = []
+    srt_index = 0
+    for cue in cues:
+        out_words: list[str] = []
+        for word in cue.text.split():
+            word_tokens = _tokens(word)
+            if not word_tokens:
+                out_words.append(word)
+                continue
+            expected = (
+                reference_for_srt[srt_index]
+                if srt_index < len(reference_for_srt)
+                else None
+            )
+            srt_index += len(word_tokens)
+            # Chỉ thay khi từ này là một token duy nhất và transcript có chuẩn
+            # khớp; từ nhiều token (ví dụ chữ Hán) giữ nguyên cho an toàn.
+            out_words.append(
+                expected if len(word_tokens) == 1 and expected is not None else word
+            )
+        new_text = " ".join(out_words)
+        corrected.append(
+            TimedWord(new_text, cue.start_us, cue.end_us)
+            if new_text.strip()
+            else cue
+        )
+
+    return corrected
+
+
+def split_transcript_sentences(text: str, *, split_by_punctuation: bool = True) -> list[str]:
+    """Split transcript by sentence punctuation or one-sentence-per-line.
+
+    split_by_punctuation=True joins the meaningful lines back together and
+    splits at multilingual terminators.
+    split_by_punctuation=False keeps each meaningful line as a single sentence.
+    Lines with no alphanumeric character are always dropped, so a line holding
+    nothing but punctuation never counts as a sentence.
+    """
+
+    lines = [re.sub(r"\s+", " ", raw).strip() for raw in text.splitlines()]
+    lines = [line for line in lines if line and is_meaningful_sentence(line)]
+    if not lines:
+        raise ValueError("transcript không có câu nào hợp lệ")
+
+    if not split_by_punctuation:
+        return lines
+
+    source = " ".join(lines)
     sentences: list[str] = []
     start = 0
     index = 0
-    while index < len(normalized):
-        character = normalized[index]
-        if character not in SENTENCE_TERMINATORS or _is_decimal_point(normalized, index):
+    while index < len(source):
+        if source[index] not in SENTENCE_TERMINATORS or _is_decimal_point(source, index):
             index += 1
             continue
 
         index += 1
-        while index < len(normalized) and normalized[index] in SENTENCE_TERMINATORS:
+        while index < len(source) and source[index] in SENTENCE_TERMINATORS:
             index += 1
-        while index < len(normalized) and normalized[index] in SENTENCE_CLOSERS:
+        while index < len(source) and source[index] in SENTENCE_CLOSERS:
             index += 1
-        sentence = normalized[start:index].strip()
-        if sentence:
+        sentence = source[start:index].strip()
+        if sentence and is_meaningful_sentence(sentence):
             sentences.append(sentence)
         start = index
 
-    remainder = normalized[start:].strip()
-    if remainder:
+    remainder = source[start:].strip()
+    if remainder and is_meaningful_sentence(remainder):
         sentences.append(remainder)
+
     if not sentences:
-        raise ValueError("transcript không có câu nào")
+        raise ValueError("transcript không có câu nào hợp lệ")
     return sentences
-
-
 def align_transcript_lines(
     lines: Sequence[str],
     words: Sequence[TimedWord],
@@ -336,6 +479,10 @@ def align_transcript_lines(
 
     token_mapping = _matching_token_map(reference_tokens, recognized_tokens)
     boundaries = [0]
+    # Recognized-token index of every scene boundary. The scene times below come
+    # from these, and the same slices hand each line its own per-word stamps so
+    # a split caption can sit exactly on the words it shows.
+    recognized_boundaries = [0]
     line_count = len(lines)
     for line_index, reference_boundary in enumerate(reference_boundaries[1:-1], 1):
         recognized_boundary = _recognized_boundary(
@@ -348,11 +495,25 @@ def align_transcript_lines(
         minimum = boundaries[-1] + 1
         maximum = audio_duration_us - (line_count - line_index)
         boundaries.append(max(minimum, min(timestamp, maximum)))
+        recognized_boundaries.append(recognized_boundary)
     boundaries.append(audio_duration_us)
+    recognized_boundaries.append(len(recognized_tokens))
 
     return [
-        AlignedTranscriptLine(line.strip(), start, end - start)
-        for line, start, end in zip(lines, boundaries[:-1], boundaries[1:], strict=True)
+        AlignedTranscriptLine(
+            line.strip(),
+            start,
+            end - start,
+            word_times=tuple(token_times[first:last]),
+        )
+        for line, start, end, first, last in zip(
+            lines,
+            boundaries[:-1],
+            boundaries[1:],
+            recognized_boundaries[:-1],
+            recognized_boundaries[1:],
+            strict=True,
+        )
     ]
 
 
@@ -460,6 +621,20 @@ def _srt_transcript_text(text: str) -> str:
         if content:
             cues.append(" ".join(content))
     return " ".join(cues)
+
+
+def _srt_timestamp_us(hours: str, minutes: str, seconds: str, milliseconds: str) -> int:
+    return (
+        (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1_000_000
+        + int(milliseconds) * 1000
+    )
+
+
+def _srt_timestamp_us(hours: str, minutes: str, seconds: str, milliseconds: str) -> int:
+    return (
+        (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1_000_000
+        + int(milliseconds) * 1000
+    )
 
 
 def _is_decimal_point(text: str, index: int) -> bool:

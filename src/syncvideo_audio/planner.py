@@ -29,9 +29,13 @@ from .probe import FfprobeMediaProbe, MediaProbe
 from .runtime import ProgressCallback, report_progress
 from .transcription import (
     AudioTranscriber,
+    TimedWord,
     WhisperConfig,
+    _tokens,
     align_transcript_lines,
+    correct_srt_spelling,
     default_transcriber,
+    load_srt_timestamps,
     load_transcript,
     split_transcript_sentences,
 )
@@ -86,6 +90,8 @@ class PlannerConfig:
     max_video_speed: float = 4.0
     add_captions: bool = True
     motion_enabled: bool = True
+    split_by_punctuation: bool = True
+    max_caption_words: int = 8
 
     def __post_init__(self) -> None:
         if self.image_shot_duration_us <= 0:
@@ -101,6 +107,9 @@ class SceneSpec:
     duration_us: int
     text: str = ""
     scene_index: int = 1
+    # Per-token (start_us, end_us) stamps for this scene's text, in reading
+    # order. Empty when the timing source had no word-level detail.
+    word_times: tuple[tuple[int, int], ...] = ()
 
     @property
     def end_us(self) -> int:
@@ -220,6 +229,7 @@ def build_timeline(
     alignment_mode: AlignmentMode = AlignmentMode.EQUAL,
     transcript_path: str | Path | None = None,
     transcript_text: str | None = None,
+    srt_path: str | Path | None = None,
     transcriber: AudioTranscriber | None = None,
     whisper_config: WhisperConfig | None = None,
     config: PlannerConfig | None = None,
@@ -249,6 +259,12 @@ def build_timeline(
         raise ValueError("manual media order cannot be combined with a scene mapping")
     if mapping_path and mode is AlignmentMode.TRANSCRIPT:
         raise ValueError("scene mapping cannot be combined with transcript alignment")
+    if srt_path is not None and mapping_path:
+        raise ValueError("scene mapping cannot be combined with a prepared SRT")
+    if srt_path is not None and mode is not AlignmentMode.TRANSCRIPT:
+        raise ValueError("prepared SRT is only valid in transcript alignment mode")
+    # Read once, then replayed verbatim as the caption track (see below).
+    srt_cues: list[TimedWord] | None = None
     if mapping_path:
         scenes = load_scene_mapping(mapping_path, media_dir, audio_duration_us)
     else:
@@ -261,17 +277,36 @@ def build_timeline(
             if transcript_path is None and not transcript_text:
                 raise ValueError("transcript mode requires a transcript file or pasted text")
             transcript_lines = (
-                load_transcript(transcript_path)
+                load_transcript(
+                    transcript_path, split_by_punctuation=cfg.split_by_punctuation
+                )
                 if transcript_path is not None
-                else split_transcript_sentences(transcript_text or "")
+                else split_transcript_sentences(
+                    transcript_text or "",
+                    split_by_punctuation=cfg.split_by_punctuation,
+                )
             )
             _validate_transcript_media_pairing(transcript_lines, media)
-            timestamp_words = (transcriber or default_transcriber()).transcribe(
-                audio,
-                transcript_hint="\n".join(transcript_lines),
-                config=whisper_config or WhisperConfig(),
-                progress_callback=progress_callback,
-            )
+            if srt_path is not None:
+                # SRT already carries the timing, so Whisper is skipped
+                # entirely; the sentence text still comes from the transcript.
+                report_progress(
+                    progress_callback, 0.5, "Đang đọc timestamp từ file SRT có sẵn…"
+                )
+                timestamp_words = load_srt_timestamps(srt_path)
+                # The transcript is the spelling authority: rewrite whatever the
+                # SRT got wrong without ever moving a cue.
+                srt_cues = correct_srt_spelling(timestamp_words, transcript_lines)
+                report_progress(
+                    progress_callback, 1.0, "Đã đọc xong timestamp từ file SRT"
+                )
+            else:
+                timestamp_words = (transcriber or default_transcriber()).transcribe(
+                    audio,
+                    transcript_hint="\n".join(transcript_lines),
+                    config=whisper_config or WhisperConfig(),
+                    progress_callback=progress_callback,
+                )
             aligned_lines = align_transcript_lines(
                 transcript_lines,
                 timestamp_words,
@@ -284,6 +319,7 @@ def build_timeline(
                     line.duration_us,
                     text=line.text,
                     scene_index=index + 1,
+                    word_times=line.word_times,
                 )
                 for index, (path, line) in enumerate(zip(media, aligned_lines, strict=True))
             ]
@@ -316,8 +352,26 @@ def build_timeline(
             motion_index += len(video_clips)
         else:
             raise ValueError(f"unsupported scene media: {scene.path}")
-        if cfg.add_captions and scene.text.strip():
-            captions.append(TimelineCaption(scene.text.strip(), scene.start_us, scene.duration_us))
+        if cfg.add_captions and srt_cues is None and scene.text.strip():
+            captions.extend(
+                _plan_scene_captions(
+                    scene.text.strip(),
+                    scene.start_us,
+                    scene.duration_us,
+                    max_words=cfg.max_caption_words,
+                    word_times=scene.word_times,
+                )
+            )
+
+    if cfg.add_captions and srt_cues is not None:
+        # A prepared SRT is already cut to caption length and already aligned to
+        # the speech, so it is used verbatim. Re-splitting it would only move
+        # captions off the words they were timed against, and it is emitted once
+        # for the whole project rather than once per scene.
+        captions = [
+            TimelineCaption(cue.text, cue.start_us, cue.end_us - cue.start_us)
+            for cue in srt_cues
+        ]
 
     project = TimelineProject(
         name=project_name,
@@ -558,3 +612,135 @@ def _validate_contiguous(clips: Sequence[TimelineClip], duration_us: int) -> Non
         cursor = clip.end_us
     if cursor != duration_us:
         raise ValueError("visual timeline duration does not match audio duration")
+
+
+def split_caption_text(text: str, max_words: int = 8) -> list[str]:
+    """Split long caption text into balanced chunks of at most max_words words."""
+
+    words = text.split()
+    if not words:
+        return []
+    if max_words <= 0 or len(words) <= max_words:
+        return [text.strip()]
+
+    total_words = len(words)
+    num_chunks = math.ceil(total_words / max_words)
+
+    base_size = total_words // num_chunks
+    remainder = total_words % num_chunks
+    chunk_sizes = [base_size + (1 if i < remainder else 0) for i in range(num_chunks)]
+
+    chunks: list[str] = []
+    index = 0
+    for chunk_index, size in enumerate(chunk_sizes):
+        if chunk_index == len(chunk_sizes) - 1:
+            chunk_words = words[index:]
+        else:
+            target_end = index + size
+            best_end = target_end
+            for offset in (0, -1, 1):
+                candidate = target_end + offset
+                if index < candidate < len(words) and words[candidate - 1].endswith(
+                    (",", ";", ":", "\u2014", "-")
+                ):
+                    best_end = candidate
+                    break
+            chunk_words = words[index:best_end]
+            index = best_end
+        chunk = " ".join(chunk_words).strip()
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+
+def _plan_scene_captions(
+    text: str,
+    start_us: int,
+    duration_us: int,
+    max_words: int = 8,
+    word_times: Sequence[tuple[int, int]] = (),
+) -> list[TimelineCaption]:
+    """Generate one or more contiguous, short TimelineCaption objects for a scene.
+
+    When ``word_times`` is available the scene text is re-tokenised with the same
+    rules the aligner used, so each chunk can start on the first word it shows and
+    end on the last one. That keeps a split caption locked to the speech it
+    covers instead of drifting by a character-count guess.
+
+    A prepared SRT never reaches this function: it is already cut to caption
+    length and already aligned, so it is emitted verbatim by ``build_timeline``.
+    """
+
+    chunks = split_caption_text(text, max_words)
+    if not chunks:
+        return []
+    if len(chunks) == 1:
+        return [TimelineCaption(chunks[0], start_us, duration_us)]
+
+    exact = _caption_ranges_from_word_times(chunks, word_times, start_us, duration_us)
+    if exact is not None:
+        return [
+            TimelineCaption(chunk, chunk_start, chunk_end - chunk_start)
+            for chunk, (chunk_start, chunk_end) in zip(chunks, exact, strict=True)
+        ]
+
+    # No word-level source: weight by words, which is the unit the split uses.
+    weights = [_word_weight(chunk) for chunk in chunks]
+    ranges = _weighted_ranges(duration_us, weights)
+    return [
+        TimelineCaption(chunk, start_us + chunk_start, chunk_end - chunk_start)
+        for chunk, (chunk_start, chunk_end) in zip(chunks, ranges, strict=True)
+    ]
+
+
+def _caption_ranges_from_word_times(
+    chunks: Sequence[str],
+    word_times: Sequence[tuple[int, int]],
+    start_us: int,
+    duration_us: int,
+    clamp_to_scene: bool = True,
+) -> list[tuple[int, int]] | None:
+    """Place every chunk on its own words, or return None when that is impossible."""
+
+    if not word_times:
+        return None
+    # The aligner slices token_times by *recognized* token, so the counts only
+    # line up when the scene text re-tokenises to exactly the same sequence.
+    tokens = [token for chunk in chunks for token in _tokens(chunk)]
+    if len(tokens) != len(word_times):
+        return None
+
+    ranges: list[tuple[int, int]] = []
+    index = 0
+    for position, chunk in enumerate(chunks):
+        chunk_length = len(_tokens(chunk))
+        if not chunk_length:
+            return None
+        chunk_start = word_times[index][0]
+        chunk_end = word_times[index + chunk_length - 1][1]
+        index += chunk_length
+        if position:
+            # Chunks must stay contiguous and inside the scene, so a cue whose
+            # stamps run past its neighbour gets clamped to the same instant.
+            chunk_start = max(chunk_start, ranges[-1][1])
+        chunk_end = max(chunk_end, chunk_start)
+        ranges.append((chunk_start, chunk_end))
+
+    if clamp_to_scene:
+        scene_end = start_us + duration_us
+        if ranges[0][0] < start_us or ranges[-1][1] > scene_end:
+            # Only shrink to the scene bounds; never stretch, so timings stay real.
+            ranges[0] = (max(ranges[0][0], start_us), ranges[0][1])
+            ranges[-1] = (ranges[-1][0], min(ranges[-1][1], scene_end))
+            for position in range(1, len(ranges)):
+                if ranges[position][0] < ranges[position - 1][1]:
+                    ranges[position] = (ranges[position - 1][1], ranges[position][1])
+    if any(end <= begin for begin, end in ranges):
+        return None
+    return ranges
+
+
+
+
+
+

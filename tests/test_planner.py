@@ -15,6 +15,11 @@ from syncvideo_audio import (
     seconds_to_us,
     sort_media,
 )
+from syncvideo_audio.planner import (
+    _caption_ranges_from_word_times,
+    _plan_scene_captions,
+    split_caption_text,
+)
 from syncvideo_audio.transcription import TimedWord, WhisperConfig
 
 
@@ -391,3 +396,147 @@ def test_partial_timestamp_mapping_is_rejected(tmp_path: Path) -> None:
             mapping_path=mapping,
             probe=FakeProbe({"narration.wav": 5}),
         )
+
+
+def test_split_caption_text_breaks_a_long_sentence_into_three_parts() -> None:
+    text = "Buổi sáng ánh nắng chiếu qua khung cửa sổ khiến không gian trở nên ấm áp và dễ chịu thật"
+    assert len(text.split()) > 16
+
+    parts = split_caption_text(text, max_words=8)
+
+    assert len(parts) == 3
+    assert " ".join(parts) == text
+    assert all(len(part.split()) <= 8 for part in parts)
+
+
+def test_split_caption_text_returns_a_short_sentence_untouched() -> None:
+    assert split_caption_text("Câu ngắn gọn.", max_words=8) == ["Câu ngắn gọn."]
+
+
+def test_max_caption_words_zero_keeps_one_caption_per_scene() -> None:
+    long_sentence = " ".join(f"từ{index}" for index in range(20))
+    assert split_caption_text(long_sentence, max_words=0) == [long_sentence]
+
+
+def test_srt_path_skips_the_transcriber(tmp_path: Path) -> None:
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    touch(media_dir / "001.png")
+    touch(media_dir / "002.png")
+    audio = touch(tmp_path / "voice.wav")
+    srt = tmp_path / "voice.srt"
+    srt.write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\nCau mot\n\n"
+        "2\n00:00:02,000 --> 00:00:04,000\nCau hai\n",
+        encoding="utf-8",
+    )
+    probe = FakeProbe({"voice.wav": 4.0})
+
+    class ExplodingTranscriber:
+        def transcribe(self, *_args, **_kwargs):
+            raise AssertionError("Whisper must not run when an SRT is supplied")
+
+    project = build_timeline(
+        project_name="srt",
+        audio_path=audio,
+        media_dir=media_dir,
+        alignment_mode=AlignmentMode.TRANSCRIPT,
+        # Two sentences: a newline alone is not a sentence boundary.
+        transcript_text="Cau mot. Cau hai.",
+        srt_path=srt,
+        transcriber=ExplodingTranscriber(),
+        probe=probe,
+    )
+
+    # Whisper is never called and the cue boundaries drive the timing.
+    assert [caption.start_us for caption in project.captions] == [0, 2_000_000]
+    # Caption text still comes from the transcript, punctuation included.
+    assert [caption.text for caption in project.captions] == ["Cau mot.", "Cau hai."]
+
+
+def test_srt_is_rejected_outside_transcript_mode(tmp_path: Path) -> None:
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    touch(media_dir / "001.png")
+    audio = touch(tmp_path / "voice.wav")
+    srt = tmp_path / "voice.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nCau mot\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        build_timeline(
+            project_name="srt",
+            audio_path=audio,
+            media_dir=media_dir,
+            alignment_mode=AlignmentMode.EQUAL,
+            srt_path=srt,
+            probe=FakeProbe({"voice.wav": 2.0}),
+        )
+
+
+def test_split_captions_follow_word_timestamps_exactly() -> None:
+    captions = _plan_scene_captions(
+        "one two three four five six seven eight nine ten",
+        1_000_000,
+        10_000_000,
+        max_words=4,
+        word_times=tuple(
+            (1_000_000 + index * 1_000_000, 1_000_000 + index * 1_000_000 + 900_000)
+            for index in range(10)
+        ),
+    )
+
+    # split_caption_text balances 10 words into chunks of 4/3/3.
+    assert [caption.text.split()[0] for caption in captions] == ["one", "five", "eight"]
+    # The last chunk starts exactly on "eight" (index 7), not on a weighted guess.
+    assert captions[-1].start_us == 8_000_000
+    assert captions[0].start_us == 1_000_000
+    assert captions[0].duration_us == 3_900_000
+
+
+def test_split_captions_fall_back_to_word_weights_without_timestamps() -> None:
+    captions = _plan_scene_captions(
+        "aa bbb cccc ddddd eeeeee ffffffff", 0, 1_000_000, max_words=2
+    )
+
+    # Chunk word counts are 2/2/2, so each gets an equal third of the scene
+    # (rounded on the cumulative boundaries, so the middle chunk absorbs the
+    # leftover microsecond).
+    assert [caption.duration_us for caption in captions] == [333_333, 333_334, 333_333]
+
+
+def test_cue_aware_captions_never_cut_inside_a_cue() -> None:
+    # Six words share one cue, the last two another. A naive 4-word split would
+    # cut inside the first cue and start its second caption at the cue end.
+    captions = _plan_scene_captions(
+        "aa bb cc dd ee ff gg hh",
+        0,
+        4_000_000,
+        max_words=4,
+        word_times=((0, 3_000_000),) * 6 + ((3_000_000, 4_000_000),) * 2,
+        cue_aware=True,
+    )
+
+    # A cue longer than the limit stays whole; the cut lands on the cue edge.
+    assert [caption.text for caption in captions] == ["aa bb cc dd ee ff", "gg hh"]
+    assert [caption.start_us for caption in captions] == [0, 3_000_000]
+    assert [caption.duration_us for caption in captions] == [3_000_000, 1_000_000]
+
+
+def test_cue_aware_single_cue_scene_stays_inside_its_scene() -> None:
+    # One cue covers the whole scene, yet it starts before the scene opens and
+    # ends after it closes. Every caption must be pulled back inside the scene
+    # instead of spilling onto the neighbouring one.
+    captions = _plan_scene_captions(
+        "aa bb cc dd ee",
+        2_500_000,
+        1_000_000,
+        max_words=4,
+        word_times=((2_000_000, 4_000_000),) * 5,
+        cue_aware=True,
+    )
+
+    # Five words still split at the limit, and the split falls back to the scene
+    # bounds because a single cue offers no cue edge to cut on.
+    assert [caption.text for caption in captions] == ["aa bb cc", "dd ee"]
+    assert captions[0].start_us == 2_500_000
+    assert captions[-1].start_us + captions[-1].duration_us == 3_500_000

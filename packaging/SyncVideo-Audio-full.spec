@@ -25,7 +25,15 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["torch", "tensorflow"],
+    excludes=[
+        "torch",
+        "tensorflow",
+        "PyQt5",
+        "PyQt6",
+        "PySide2",
+        "PySide6",
+        "matplotlib",
+    ],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

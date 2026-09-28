@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from .capcut_exporter import CapCutDraftExporter
+from .capcut_keyframes import MotionSettings
 from .capcut_registry import CapCutRegistry
 from .manifest import CanvasSpec, seconds_to_us
 from .pipeline import OutputMode, PipelineOutputs, export_timeline
@@ -20,10 +24,22 @@ from .planner import (
     sort_media,
 )
 from .runtime import configure_runtime_storage, resolve_executable, resource_path
-from .transcription import WhisperConfig
+from .transcription import WhisperConfig, load_transcript, split_transcript_sentences
 
 
-COLORS = {
+SETTINGS_FILENAME = "SyncVideo-Audio-settings.json"
+
+#: One strength box per motion preset, in the order they are shown.
+MOTION_PRESET_LABELS = {
+    "zoom_in": "Zoom in  ·  100% → ?%",
+    "zoom_out": "Zoom out  ·  ?% → 100%",
+    "pan_left_right": "Pan trái → phải",
+    "pan_right_left": "Pan phải → trái",
+    "pan_top_bottom": "Pan trên → dưới",
+    "pan_bottom_top": "Pan dưới → trên",
+}
+
+DARK_PALETTE = {
     "background": "#0B0D12",
     "surface": "#12151D",
     "surface_raised": "#181C26",
@@ -38,7 +54,79 @@ COLORS = {
     "success": "#65D68A",
     "warning": "#FFB86B",
     "danger": "#FF6B7A",
+    "field_text": "#C8CEDA",
+    "button_text": "#DDE2EC",
+    "badge_bg": "#153A36",
+    "warning_bg": "#35291E",
+    "select_bg": "#1D5B55",
+    "press_bg": "#293141",
+    "accent_disabled": "#345D59",
+    "accent_disabled_text": "#A6B7B4",
 }
+
+LIGHT_PALETTE = {
+    "background": "#F2F4F8",
+    "surface": "#FFFFFF",
+    "surface_raised": "#EDF0F5",
+    "surface_hover": "#E1E7F0",
+    "border": "#D2D8E3",
+    "text": "#12161F",
+    "muted": "#5A6373",
+    "subtle": "#8A93A3",
+    "accent": "#0FA697",
+    "accent_hover": "#0C8C80",
+    "accent_text": "#FFFFFF",
+    "success": "#1E9E5A",
+    "warning": "#B4690E",
+    "danger": "#D13B4C",
+    "field_text": "#1F2530",
+    "button_text": "#1F2530",
+    "badge_bg": "#D3F4F0",
+    "warning_bg": "#FBE7D3",
+    "select_bg": "#B4EDE7",
+    "press_bg": "#E1E7F0",
+    "accent_disabled": "#9ADCD4",
+    "accent_disabled_text": "#F2FBFA",
+}
+
+PALETTES = {"dark": DARK_PALETTE, "light": LIGHT_PALETTE}
+
+
+def settings_path() -> Path:
+    """Settings sit next to the EXE so a portable copy keeps its own state."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent
+    return base / SETTINGS_FILENAME
+
+
+def load_settings() -> dict[str, object]:
+    try:
+        data = json.loads(settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings(data: dict[str, object]) -> None:
+    try:
+        path = settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def format_percent(value: float) -> str:
+    return f"{round(value * 100, 2):g}"
+
+
+# ponytail: settings load once at import, so two app instances would fight over
+# the same JSON. Re-read on demand if that ever matters.
+SETTINGS = load_settings()
+THEME = {"name": "light" if SETTINGS.get("theme") == "light" else "dark"}
+COLORS: dict[str, str] = dict(PALETTES[THEME["name"]])
 
 CANVAS_PRESETS = {
     "Dọc 9:16  ·  1080 × 1920": CanvasSpec(1080, 1920, 30),
@@ -133,7 +221,7 @@ class SyncVideoAudioApp(ttk.Frame):
         style.configure(
             "Field.TLabel",
             background=COLORS["surface"],
-            foreground="#C8CEDA",
+            foreground=COLORS["field_text"],
             font=("Segoe UI Semibold", 9),
         )
         style.configure(
@@ -144,14 +232,14 @@ class SyncVideoAudioApp(ttk.Frame):
         )
         style.configure(
             "Badge.TLabel",
-            background="#153A36",
+            background=COLORS["badge_bg"],
             foreground=COLORS["accent"],
             padding=(12, 7),
             font=("Segoe UI Semibold", 9),
         )
         style.configure(
             "WarningBadge.TLabel",
-            background="#35291E",
+            background=COLORS["warning_bg"],
             foreground=COLORS["warning"],
             padding=(12, 7),
             font=("Segoe UI Semibold", 9),
@@ -194,7 +282,7 @@ class SyncVideoAudioApp(ttk.Frame):
         style.configure(
             "Secondary.TButton",
             background=COLORS["surface_raised"],
-            foreground="#DDE2EC",
+            foreground=COLORS["button_text"],
             bordercolor=COLORS["border"],
             lightcolor=COLORS["border"],
             darkcolor=COLORS["border"],
@@ -203,7 +291,7 @@ class SyncVideoAudioApp(ttk.Frame):
         )
         style.map(
             "Secondary.TButton",
-            background=[("active", COLORS["surface_hover"]), ("pressed", "#293141")],
+            background=[("active", COLORS["surface_hover"]), ("pressed", COLORS["press_bg"])],
             foreground=[("disabled", COLORS["subtle"])],
         )
         style.configure(
@@ -231,14 +319,14 @@ class SyncVideoAudioApp(ttk.Frame):
         )
         style.map(
             "Accent.TButton",
-            background=[("active", COLORS["accent_hover"]), ("disabled", "#345D59")],
-            foreground=[("disabled", "#A6B7B4")],
+            background=[("active", COLORS["accent_hover"]), ("disabled", COLORS["accent_disabled"])],
+            foreground=[("disabled", COLORS["accent_disabled_text"])],
         )
 
         style.configure(
             "Dark.TCheckbutton",
             background=COLORS["surface"],
-            foreground="#C8CEDA",
+            foreground=COLORS["field_text"],
             indicatorbackground=COLORS["surface_raised"],
             indicatorforeground=COLORS["accent"],
             bordercolor=COLORS["border"],
@@ -254,7 +342,7 @@ class SyncVideoAudioApp(ttk.Frame):
             "Treeview",
             background=COLORS["surface_raised"],
             fieldbackground=COLORS["surface_raised"],
-            foreground="#DDE2EC",
+            foreground=COLORS["button_text"],
             bordercolor=COLORS["border"],
             lightcolor=COLORS["border"],
             darkcolor=COLORS["border"],
@@ -272,7 +360,7 @@ class SyncVideoAudioApp(ttk.Frame):
         )
         style.map(
             "Treeview",
-            background=[("selected", "#1D5B55")],
+            background=[("selected", COLORS["select_bg"])],
             foreground=[("selected", COLORS["text"])],
         )
         style.map("Treeview.Heading", background=[("active", COLORS["surface_hover"])])
@@ -286,6 +374,106 @@ class SyncVideoAudioApp(ttk.Frame):
             thickness=5,
         )
         style.configure("Dark.TSeparator", background=COLORS["border"])
+
+    def _toggle_theme(self) -> None:
+        THEME["name"] = "light" if THEME["name"] == "dark" else "dark"
+        COLORS.clear()
+        COLORS.update(PALETTES[THEME["name"]])
+        self._configure_theme()
+        self._refresh_themed_widgets()
+        self.theme_button.configure(text=self._theme_button_text())
+        self._save_settings()
+
+    def _theme_button_text(self) -> str:
+        return "Nền tối" if THEME["name"] == "light" else "Nền sáng"
+
+    def _refresh_themed_widgets(self) -> None:
+        # ttk widgets re-read their style; plain tk widgets must be told directly.
+        self.content_canvas.configure(background=COLORS["background"])
+        self.logo_label.configure(background=COLORS["background"])
+        self.transcript_box.configure(
+            background=COLORS["background"],
+            foreground=COLORS["text"],
+            selectbackground=COLORS["select_bg"],
+            highlightbackground=COLORS["border"],
+        )
+        self.status_dot.configure(background=COLORS["background"])
+
+    def _current_settings(self) -> dict[str, object]:
+        return {
+            "theme": THEME["name"],
+            "name": self.name_var.get(),
+            "alignment": self.alignment_var.get(),
+            "audio": self.audio_var.get(),
+            "media_dir": self.media_dir_var.get(),
+            "transcript": self.transcript_var.get(),
+            "output": self.output_var.get(),
+            "draft_root": self.draft_root_var.get(),
+            "mode": self.mode_var.get(),
+            "canvas": self.canvas_var.get(),
+            "image_duration": self.image_duration_var.get(),
+            "motion": self.motion_var.get(),
+            "burn_captions": self.burn_caption_var.get(),
+            "register": self.register_var.get(),
+            "line_by_line": self.line_by_line_var.get(),
+            "auto_split_captions": self.auto_split_captions_var.get(),
+            "use_srt": self.use_srt_var.get(),
+            "srt": self.srt_var.get(),
+            # ponytail: the transcript text box itself is not persisted, only the
+            # file path. Add the body if you want to restore pasted text too.
+            "motion_amounts": {
+                name: variable.get() for name, variable in self.motion_amount_vars.items()
+            },
+        }
+
+    def _save_settings(self) -> None:
+        save_settings(self._current_settings())
+
+    def _restore_settings(self) -> None:
+        stored = SETTINGS
+        for key, variable in (
+            ("name", self.name_var),
+            ("alignment", self.alignment_var),
+            ("audio", self.audio_var),
+            ("media_dir", self.media_dir_var),
+            ("transcript", self.transcript_var),
+            ("draft_root", self.draft_root_var),
+            ("srt", self.srt_var),
+            ("image_duration", self.image_duration_var),
+        ):
+            value = stored.get(key)
+            if isinstance(value, str) and value:
+                variable.set(value)
+        for key, allowed in (
+            ("canvas", list(CANVAS_PRESETS)),
+            ("mode", [mode.value for mode in OutputMode]),
+        ):
+            value = stored.get(key)
+            if isinstance(value, str) and value in allowed:
+                if key == "canvas":
+                    self.canvas_var.set(value)
+                else:
+                    self.mode_var.set(value)
+        output = stored.get("output")
+        if isinstance(output, str) and output:
+            self.output_var.set(output)
+        for key, variable in (
+            ("motion", self.motion_var),
+            ("burn_captions", self.burn_caption_var),
+            ("register", self.register_var),
+            ("line_by_line", self.line_by_line_var),
+            ("auto_split_captions", self.auto_split_captions_var),
+            ("use_srt", self.use_srt_var),
+        ):
+            value = stored.get(key)
+            if isinstance(value, bool):
+                variable.set(value)
+        amounts = stored.get("motion_amounts")
+        if isinstance(amounts, dict):
+            for name, variable in self.motion_amount_vars.items():
+                value = amounts.get(name)
+                if isinstance(value, str) and value:
+                    variable.set(value)
 
     def _build_variables(self) -> None:
         self.name_var = tk.StringVar(value="Video mới")
@@ -305,6 +493,19 @@ class SyncVideoAudioApp(ttk.Frame):
         self.media_count_var = tk.StringVar(value="Chưa có media")
         self.media_warning_var = tk.StringVar()
         self.runtime_var = tk.StringVar(value="Đang kiểm tra CapCut…")
+        self.line_by_line_var = tk.BooleanVar(value=False)
+        self.transcript_count_var = tk.StringVar(value="Đã tách: 0 câu")
+        self.auto_split_captions_var = tk.BooleanVar(value=True)
+        self.srt_var = tk.StringVar()
+        self.use_srt_var = tk.BooleanVar(value=False)
+        self.srt_hint_var = tk.StringVar(
+            value="Chỉ dùng timestamp trong SRT; câu chữ vẫn lấy từ transcript ở trên."
+        )
+        self.motion_amount_vars = {
+            preset: tk.StringVar(value=format_percent(MotionSettings().amounts()[preset]))
+            for preset in MOTION_PRESET_LABELS
+        }
+        self._restore_settings()
 
     def _build_ui(self) -> None:
         self.master.title("SyncVideo-Audio · CapCut Hand-off Studio")
@@ -383,6 +584,7 @@ class SyncVideoAudioApp(ttk.Frame):
                 height=2,
             )
         logo.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 14))
+        self.logo_label = logo
         ttk.Label(header, text="CapCut Hand-off Studio", style="Title.TLabel").grid(
             row=0, column=1, sticky="sw"
         )
@@ -421,13 +623,7 @@ class SyncVideoAudioApp(ttk.Frame):
             self._alignment_changed,
         )
         self._field(card, 5, "AUDIO THUYẾT MINH", self.audio_var, self._choose_audio)
-        self.transcript_entry, self.transcript_button = self._field(
-            card,
-            6,
-            "TRANSCRIPT  ·  DÁN TEXT / CHỌN FILE  ·  TÁCH THEO . ! ? 。！？",
-            self.transcript_var,
-            self._choose_transcript,
-        )
+        self._transcript_field(card, 6)
         self._field(card, 7, "THƯ MỤC ẢNH / VIDEO", self.media_dir_var, self._choose_media_dir)
         self._field(card, 8, "THƯ MỤC OUTPUT", self.output_var, self._choose_output)
         self._field(card, 9, "CAPCUT DRAFT ROOT", self.draft_root_var, self._choose_draft_root)
@@ -570,49 +766,97 @@ class SyncVideoAudioApp(ttk.Frame):
             variable=self.burn_caption_var,
             style="Dark.TCheckbutton",
         ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(
+            checks,
+            text="Tự động cắt phụ đề dài (~7-8 từ/phần)",
+            variable=self.auto_split_captions_var,
+            style="Dark.TCheckbutton",
+        ).grid(row=2, column=0, sticky="w", pady=(8, 0))
         ttk.Label(
             checks,
             text="Đóng project đang mở trong CapCut trước khi tạo draft.",
             style="CardMuted.TLabel",
-        ).grid(row=1, column=1, columnspan=2, sticky="e", padx=(24, 0), pady=(8, 0))
+        ).grid(row=2, column=1, columnspan=2, sticky="e", padx=(24, 0), pady=(8, 0))
         checks.columnconfigure(2, weight=1)
+
+        ttk.Separator(card, style="Dark.TSeparator").grid(
+            row=5, column=0, columnspan=6, sticky="ew", pady=(14, 0)
+        )
+        ttk.Label(
+            card,
+            text="CƯỜNG ĐỘ MOTION KEYFRAME  ·  nhập theo %",
+            style="Field.TLabel",
+        ).grid(row=6, column=0, columnspan=6, sticky="w", pady=(12, 0))
+        motion_grid = ttk.Frame(card, style="CardInner.TFrame")
+        motion_grid.grid(row=7, column=0, columnspan=6, sticky="ew", pady=(8, 0))
+        for column in range(3):
+            motion_grid.columnconfigure(column, weight=1, uniform="motion")
+        for index, preset in enumerate(MOTION_PRESET_LABELS):
+            cell = ttk.Frame(motion_grid, style="CardInner.TFrame")
+            cell.grid(row=index // 3, column=index % 3, sticky="ew", padx=(0, 16), pady=(0, 8))
+            cell.columnconfigure(1, weight=1)
+            ttk.Label(cell, text=MOTION_PRESET_LABELS[preset], style="Field.TLabel").grid(
+                row=0, column=0, columnspan=2, sticky="w", pady=(0, 3)
+            )
+            ttk.Entry(
+                cell,
+                textvariable=self.motion_amount_vars[preset],
+                width=6,
+                justify="right",
+            ).grid(row=1, column=0, sticky="w")
+            ttk.Label(cell, text="%", style="CardMuted.TLabel").grid(
+                row=1, column=1, sticky="w", padx=(6, 0)
+            )
+        ttk.Label(
+            card,
+            text="Zoom 8 = phóng từ 100% lên 108%. Phần overscan của pan tự tính bằng "
+            "2,5 lần giá trị pan.",
+            style="CardMuted.TLabel",
+        ).grid(row=8, column=0, columnspan=6, sticky="w", pady=(4, 0))
 
     def _build_action_bar(self) -> None:
         action = ttk.Frame(self, style="Header.TFrame")
         action.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        action.columnconfigure(1, weight=1)
+        action.columnconfigure(2, weight=1)
 
-        status_dot = tk.Label(
+        self.theme_button = ttk.Button(
+            action,
+            text=self._theme_button_text(),
+            style="Secondary.TButton",
+            command=self._toggle_theme,
+        )
+        self.theme_button.grid(row=0, column=0, sticky="w")
+        self.status_dot = tk.Label(
             action,
             text="●",
             background=COLORS["background"],
             foreground=COLORS["accent"],
             font=("Segoe UI", 9),
         )
-        status_dot.grid(row=0, column=0, sticky="w", padx=(0, 7))
+        self.status_dot.grid(row=0, column=1, sticky="w", padx=(18, 7))
         ttk.Label(action, textvariable=self.status_var, style="Status.TLabel").grid(
-            row=0, column=1, sticky="w"
+            row=0, column=2, sticky="w"
         )
         ttk.Button(
             action,
             text="Mở thư mục output",
             style="Secondary.TButton",
             command=lambda: self._open_folder(self.output_var.get()),
-        ).grid(row=0, column=2, padx=(10, 10))
+        ).grid(row=0, column=3, padx=(10, 10))
         self.build_button = ttk.Button(
             action,
             text="Tạo project  →",
             style="Accent.TButton",
             command=self._start_build,
         )
-        self.build_button.grid(row=0, column=3)
+        self.build_button.grid(row=0, column=4)
         self.progress = ttk.Progressbar(
             action,
             mode="determinate",
             maximum=100,
             style="Accent.Horizontal.TProgressbar",
         )
-        self.progress.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        self.progress.grid(row=1, column=0, columnspan=5, sticky="ew", pady=(12, 0))
         self.progress.grid_remove()
 
     def _card(
@@ -705,6 +949,126 @@ class SyncVideoAudioApp(ttk.Frame):
         combo.grid(row=1, column=0, sticky="ew")
         combo.bind("<<ComboboxSelected>>", lambda _event: command())
 
+    def _transcript_field(self, parent: ttk.Frame, row: int) -> None:
+        wrapper = ttk.Frame(parent, style="CardInner.TFrame")
+        wrapper.grid(row=row, column=0, sticky="ew", pady=(7, 0))
+        wrapper.columnconfigure(0, weight=1)
+
+        header = ttk.Frame(wrapper, style="CardInner.TFrame")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew")
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="TRANSCRIPT  ·  KÍCH BẢN", style="Field.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 3)
+        )
+        self.transcript_checkbutton = ttk.Checkbutton(
+            header,
+            text="Mỗi dòng 1 câu",
+            variable=self.line_by_line_var,
+            style="Dark.TCheckbutton",
+            command=self._on_toggle_line_by_line,
+        )
+        self.transcript_checkbutton.grid(row=0, column=1, sticky="e")
+        self.transcript_count_label = ttk.Label(
+            header, textvariable=self.transcript_count_var, style="Badge.TLabel"
+        )
+        self.transcript_count_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(3, 0))
+
+        body = ttk.Frame(wrapper, style="CardInner.TFrame")
+        body.grid(row=1, column=0, columnspan=2, sticky="ew")
+        body.columnconfigure(0, weight=1)
+        self.transcript_box = tk.Text(
+            body,
+            height=5,
+            wrap="word",
+            background=COLORS["background"],
+            foreground=COLORS["text"],
+            insertbackground=COLORS["accent"],
+            selectbackground=COLORS["select_bg"],
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["accent"],
+            font=("Segoe UI", 10),
+            padx=8,
+            pady=6,
+        )
+        self.transcript_box.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(body, orient="vertical", command=self.transcript_box.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.transcript_box.configure(yscrollcommand=scroll.set)
+        self.transcript_box.bind("<<Modified>>", self._on_box_modified)
+
+        self.transcript_button = ttk.Button(
+            wrapper,
+            text="Chọn file transcript…",
+            style="Secondary.TButton",
+            command=self._choose_transcript,
+        )
+        self.transcript_button.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        srt_row = ttk.Frame(wrapper, style="CardInner.TFrame")
+        srt_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(9, 0))
+        srt_row.columnconfigure(1, weight=1)
+        self.use_srt_checkbutton = ttk.Checkbutton(
+            srt_row,
+            text="Dùng SRT có sẵn (bỏ qua Whisper)",
+            variable=self.use_srt_var,
+            style="Dark.TCheckbutton",
+            command=self._on_toggle_use_srt,
+        )
+        self.use_srt_checkbutton.grid(row=0, column=0, sticky="w")
+        self.srt_entry = ttk.Entry(srt_row, textvariable=self.srt_var)
+        self.srt_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.srt_button = ttk.Button(
+            srt_row,
+            text="Chọn…",
+            style="Secondary.TButton",
+            command=self._choose_srt,
+        )
+        self.srt_button.grid(row=0, column=2, padx=(8, 0))
+        ttk.Label(
+            srt_row, textvariable=self.srt_hint_var, style="CardMuted.TLabel"
+        ).grid(row=1, column=1, columnspan=2, sticky="w", pady=(3, 0))
+
+    def _transcript_text(self) -> str:
+        return self.transcript_box.get("1.0", "end").strip()
+
+    def _set_transcript_text(self, text: str) -> None:
+        self.transcript_box.delete("1.0", "end")
+        self.transcript_box.insert("1.0", text)
+
+    def _on_box_modified(self, _event=None) -> None:
+        # Reset the flag so the next keystroke fires the event again.
+        self.transcript_box.edit_modified(False)
+        self._update_transcript_stats()
+
+    def _split_transcript(self, text: str) -> list[str]:
+        return split_transcript_sentences(
+            text, split_by_punctuation=not self.line_by_line_var.get()
+        )
+
+    def _update_transcript_stats(self) -> None:
+        text = self._transcript_text()
+        if not text:
+            self.transcript_count_var.set("Đã tách: 0 câu")
+            return
+        try:
+            count = len(self._split_transcript(text))
+        except ValueError:
+            self.transcript_count_var.set("Transcript không có câu hợp lệ")
+            return
+        self.transcript_count_var.set(f"Đã tách: {count} câu")
+
+    def _on_toggle_line_by_line(self) -> None:
+        text = self._transcript_text()
+        if text:
+            try:
+                self._set_transcript_text("\n".join(self._split_transcript(text)))
+            except ValueError:
+                pass
+        self._update_transcript_stats()
+
     def _choose_audio(self) -> None:
         value = filedialog.askopenfilename(
             title="Chọn audio thuyết minh",
@@ -732,12 +1096,46 @@ class SyncVideoAudioApp(ttk.Frame):
         )
         if value:
             self.transcript_var.set(value)
+            try:
+                sentences = load_transcript(
+                    value, split_by_punctuation=not self.line_by_line_var.get()
+                )
+            except (OSError, ValueError) as error:
+                messagebox.showerror("Transcript", str(error))
+                sentences = []
+            self._set_transcript_text("\n".join(sentences))
+            self._update_transcript_stats()
 
     def _alignment_changed(self) -> None:
         enabled = ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT
-        self.transcript_entry.configure(state="normal" if enabled else "disabled")
-        if self.transcript_button:
-            self.transcript_button.configure(state="normal" if enabled else "disabled")
+        state = "normal" if enabled else "disabled"
+        self.transcript_box.configure(state=state)
+        self.transcript_button.configure(state=state)
+        self.transcript_checkbutton.configure(state=state)
+        self.transcript_count_label.configure(state=state)
+        self.use_srt_checkbutton.configure(state=state)
+        self._on_toggle_use_srt()
+
+    def _on_toggle_use_srt(self) -> None:
+        enabled = (
+            self.use_srt_var.get()
+            and ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT
+        )
+        state = "normal" if enabled else "disabled"
+        self.srt_entry.configure(state=state)
+        self.srt_button.configure(state=state)
+
+    def _choose_srt(self) -> None:
+        value = filedialog.askopenfilename(
+            title="Chọn file SRT có sẵn",
+            filetypes=[
+                ("Subtitle", "*.srt"),
+                ("Transcript", "*.txt *.srt *.json"),
+                ("Tất cả", "*.*"),
+            ],
+        )
+        if value:
+            self.srt_var.set(value)
 
     def _choose_output(self) -> None:
         value = filedialog.askdirectory(title="Chọn thư mục output")
@@ -808,8 +1206,13 @@ class SyncVideoAudioApp(ttk.Frame):
         capcut_ready = False
         try:
             registry = CapCutRegistry.discover()
-            if registry:
-                self.draft_root_var.set(str(registry.draft_root()))
+            if registry is not None:
+                # A stored draft root from a previous session wins over auto-detect,
+                # but CapCut itself is installed either way, so the badge must not
+                # fall back to "Chưa phát hiện CapCut" just because the field is
+                # already filled in.
+                if not self.draft_root_var.get().strip():
+                    self.draft_root_var.set(str(registry.draft_root()))
                 capcut_ready = True
         except (OSError, ValueError):
             pass
@@ -835,6 +1238,7 @@ class SyncVideoAudioApp(ttk.Frame):
             self.runtime_badge.configure(style="WarningBadge.TLabel")
 
     def _start_build(self) -> None:
+        self._save_settings()
         try:
             request = self._collect_request()
         except (OSError, ValueError) as error:
@@ -843,7 +1247,11 @@ class SyncVideoAudioApp(ttk.Frame):
         self.build_button.configure(state="disabled", text="Đang xử lý…")
         self.progress.grid()
         self.progress.configure(value=0)
-        if ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT:
+        using_srt = bool(request.get("srt_path"))
+        if (
+            ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT
+            and not using_srt
+        ):
             # Model construction is not measurable and can take a few minutes
             # on a CPU-only machine. Keep the UI visibly alive until Whisper
             # starts yielding timestamp progress.
@@ -851,7 +1259,10 @@ class SyncVideoAudioApp(ttk.Frame):
             self.progress.start(12)
         else:
             self.progress.configure(mode="determinate")
-        if ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT:
+        if (
+            ALIGNMENT_OPTIONS[self.alignment_var.get()] is AlignmentMode.TRANSCRIPT
+            and not using_srt
+        ):
             self.status_var.set("Whisper đang lấy timestamp và căn transcript…")
         else:
             self.status_var.set("Đang lập timeline và tạo output…")
@@ -869,28 +1280,43 @@ class SyncVideoAudioApp(ttk.Frame):
         if duration <= 0:
             raise ValueError("Thời lượng ảnh/shot phải lớn hơn 0 giây")
         alignment_mode = ALIGNMENT_OPTIONS[self.alignment_var.get()]
-        transcript = self.transcript_var.get().strip()
-        if alignment_mode is AlignmentMode.TRANSCRIPT and not transcript:
+        transcript_file = self.transcript_var.get().strip()
+        if alignment_mode is AlignmentMode.TRANSCRIPT and not (
+            transcript_file or self._transcript_text()
+        ):
             raise ValueError("Chế độ căn chuẩn cần dán text hoặc chọn file transcript")
         transcript_path: Path | None = None
-        transcript_text: str | None = None
-        if alignment_mode is AlignmentMode.TRANSCRIPT and transcript:
+        transcript_text: str | None = self._transcript_text() or None
+        if alignment_mode is AlignmentMode.TRANSCRIPT and transcript_file:
             try:
-                candidate = Path(transcript)
+                candidate = Path(transcript_file)
                 is_file = candidate.is_file()
             except OSError:
                 candidate = None
                 is_file = False
             if is_file:
                 transcript_path = candidate
+                transcript_text = None
             elif candidate is not None and candidate.suffix.lower() in {
                 ".txt",
                 ".srt",
                 ".json",
-            } and ("\\" in transcript or "/" in transcript):
+            } and ("\\" in transcript_file or "/" in transcript_file):
                 raise FileNotFoundError(f"Transcript không tồn tại: {candidate}")
-            else:
-                transcript_text = transcript
+        srt_path: Path | None = None
+        if alignment_mode is AlignmentMode.TRANSCRIPT and self.use_srt_var.get():
+            srt_file = self.srt_var.get().strip()
+            if not srt_file:
+                raise ValueError("Đã bật dùng SRT có sẵn nhưng chưa chọn file SRT")
+            try:
+                srt_candidate = Path(srt_file)
+                srt_is_file = srt_candidate.is_file()
+            except OSError:
+                srt_candidate = None
+                srt_is_file = False
+            if not srt_is_file:
+                raise FileNotFoundError(f"SRT không tồn tại: {srt_file}")
+            srt_path = srt_candidate
         return {
             "name": name,
             "audio": Path(self.audio_var.get()),
@@ -898,6 +1324,7 @@ class SyncVideoAudioApp(ttk.Frame):
             "alignment_mode": alignment_mode,
             "transcript_path": transcript_path,
             "transcript_text": transcript_text,
+            "srt_path": srt_path,
             "ordered": list(self.media_paths),
             "output": Path(self.output_var.get()),
             "draft_root": (
@@ -907,9 +1334,30 @@ class SyncVideoAudioApp(ttk.Frame):
             "canvas": CANVAS_PRESETS[self.canvas_var.get()],
             "image_duration": seconds_to_us(duration),
             "motion": self.motion_var.get(),
+            "motion_settings": MotionSettings(**self._motion_amounts()),
             "burn_captions": self.burn_caption_var.get(),
             "register": self.register_var.get(),
+            "split_by_punctuation": not self.line_by_line_var.get(),
+            "max_caption_words": 8 if self.auto_split_captions_var.get() else 0,
         }
+
+    def _motion_amounts(self) -> dict[str, float]:
+        """Parse the percent boxes into the fraction the keyframes expect."""
+        amounts: dict[str, float] = {}
+        for preset, variable in self.motion_amount_vars.items():
+            raw = variable.get().strip().replace(",", ".")
+            try:
+                percent = float(raw)
+            except ValueError:
+                raise ValueError(
+                    f"Giá trị motion của {MOTION_PRESET_LABELS[preset]} không hợp lệ: {raw!r}"
+                ) from None
+            if not 0.0 < percent <= 50.0:
+                raise ValueError(
+                    f"{MOTION_PRESET_LABELS[preset]} phải lớn hơn 0% và không quá 50%"
+                )
+            amounts[preset] = percent / 100.0
+        return amounts
 
     def _worker(self, request: dict[str, object]) -> None:
         try:
@@ -921,6 +1369,7 @@ class SyncVideoAudioApp(ttk.Frame):
                 alignment_mode=request["alignment_mode"],
                 transcript_path=request["transcript_path"],
                 transcript_text=request["transcript_text"],
+                srt_path=request["srt_path"],
                 whisper_config=WhisperConfig(model="small"),
                 progress_callback=lambda value, message: self._emit_progress(
                     0.02 + value * 0.18, message
@@ -929,6 +1378,8 @@ class SyncVideoAudioApp(ttk.Frame):
                     canvas=request["canvas"],
                     image_shot_duration_us=int(request["image_duration"]),
                     motion_enabled=bool(request["motion"]),
+                    split_by_punctuation=bool(request["split_by_punctuation"]),
+                    max_caption_words=int(request["max_caption_words"]),
                 ),
             )
             outputs = export_timeline(
@@ -938,6 +1389,9 @@ class SyncVideoAudioApp(ttk.Frame):
                 draft_root=request["draft_root"],
                 register_with_capcut=bool(request["register"]),
                 burn_captions=bool(request["burn_captions"]),
+                capcut_exporter=CapCutDraftExporter(
+                    motion_settings=request["motion_settings"],
+                ),
                 progress_callback=lambda value, message: self._emit_progress(
                     0.20 + value * 0.80, message
                 ),
@@ -990,6 +1444,10 @@ class SyncVideoAudioApp(ttk.Frame):
             )
         self.after(100, self._poll_events)
 
+    def _quit(self) -> None:
+        self._save_settings()
+        self.master.destroy()
+
     @staticmethod
     def _open_folder(value: str) -> None:
         path = Path(value).resolve()
@@ -1013,7 +1471,8 @@ def launch() -> None:
     configure_runtime_storage()
     _set_windows_app_user_model_id()
     root = tk.Tk()
-    SyncVideoAudioApp(root)
+    app = SyncVideoAudioApp(root)
+    root.protocol("WM_DELETE_WINDOW", app._quit)
     _center_window(root)
     root.mainloop()
 

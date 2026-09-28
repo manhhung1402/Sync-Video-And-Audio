@@ -32,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="equal: chia đều; transcript: dùng Whisper timestamp và ghép theo thứ tự media",
     )
     build.add_argument("--transcript", type=Path, help="TXT/SRT/JSON, một câu cho mỗi media")
+    build.add_argument(
+        "--srt",
+        type=Path,
+        dest="srt",
+        help="file SRT có sẵn để lấy timestamp, bỏ qua Whisper",
+    )
     build.add_argument("--whisper-model", default="small")
     build.add_argument("--language", help="mã ngôn ngữ Whisper, ví dụ vi/en/ja")
     _add_output_arguments(build)
@@ -41,6 +47,19 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--image-duration", type=float, default=6.0)
     build.add_argument("--no-motion", action="store_true")
     build.add_argument("--no-captions", action="store_true")
+    build.add_argument(
+        "--line-by-line",
+        "--split-by-line",
+        dest="line_by_line",
+        action="store_true",
+        help="mỗi dòng transcript là 1 câu thay vì tách theo dấu câu",
+    )
+    build.add_argument(
+        "--max-caption-words",
+        type=int,
+        default=8,
+        help="số từ tối đa một phần phụ đề cắt từ (0 = không cắt)",
+    )
 
     export = subparsers.add_parser("export", help="export an existing editable timeline manifest")
     export.add_argument("manifest", type=Path)
@@ -69,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
                 mapping_path=args.mapping,
                 alignment_mode=AlignmentMode(args.sync_mode),
                 transcript_path=args.transcript,
+                srt_path=args.srt,
                 whisper_config=WhisperConfig(
                     model=args.whisper_model,
                     language=args.language,
@@ -78,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
                     image_shot_duration_us=seconds_to_us(args.image_duration),
                     add_captions=not args.no_captions,
                     motion_enabled=not args.no_motion,
+                    split_by_punctuation=not args.line_by_line,
+                    max_caption_words=args.max_caption_words,
                 ),
             )
         else:

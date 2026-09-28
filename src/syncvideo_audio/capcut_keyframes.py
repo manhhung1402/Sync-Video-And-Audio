@@ -9,19 +9,36 @@ from .capcut_schema import capcut_id
 from .manifest import MotionPreset
 
 
+#: Pan overscan is derived from the travel amount instead of being tuned separately.
+PAN_OVERSCAN_RATIO = 2.5
+MAX_AMOUNT = 0.5
+
+
 @dataclass(frozen=True, slots=True)
 class MotionSettings:
-    zoom_amount: float = 0.08
-    pan_amount: float = 0.025
-    pan_overscan: float = 0.06
+    """One strength value per motion preset, in fractions of the frame."""
+
+    zoom_in: float = 0.08
+    zoom_out: float = 0.08
+    pan_left_right: float = 0.025
+    pan_right_left: float = 0.025
+    pan_top_bottom: float = 0.025
+    pan_bottom_top: float = 0.025
 
     def __post_init__(self) -> None:
-        if not 0.0 < self.zoom_amount <= 0.5:
-            raise ValueError("zoom amount must be between 0 and 0.5")
-        if not 0.0 < self.pan_amount <= 0.25:
-            raise ValueError("pan amount must be between 0 and 0.25")
-        if not 0.0 <= self.pan_overscan <= 0.5:
-            raise ValueError("pan overscan must be between 0 and 0.5")
+        for name, value in self.amounts().items():
+            if not 0.0 < value <= MAX_AMOUNT:
+                raise ValueError(f"{name} must be between 0 and {MAX_AMOUNT}")
+
+    def amounts(self) -> dict[str, float]:
+        return {
+            preset.value: float(getattr(self, preset.value))
+            for preset in MotionPreset
+            if preset is not MotionPreset.NONE
+        }
+
+    def amount_for(self, preset: MotionPreset) -> float:
+        return float(getattr(self, MotionPreset(preset).value))
 
 
 DEFAULT_MOTION_SETTINGS = MotionSettings()
@@ -41,8 +58,9 @@ def apply_motion_keyframes(
     if preset is MotionPreset.NONE:
         return
 
-    zoom = 1.0 + settings.zoom_amount
-    overscan = 1.0 + settings.pan_overscan
+    amount = settings.amount_for(preset)
+    zoom = 1.0 + amount
+    overscan = 1.0 + min(amount * PAN_OVERSCAN_RATIO, MAX_AMOUNT)
     motion: list[tuple[str, float, float]]
     if preset is MotionPreset.ZOOM_IN:
         motion = [("KFTypeScaleX", 1.0, zoom)]
@@ -51,22 +69,22 @@ def apply_motion_keyframes(
     elif preset is MotionPreset.PAN_LEFT_RIGHT:
         motion = [
             ("KFTypeScaleX", overscan, overscan),
-            ("KFTypePositionX", -settings.pan_amount, settings.pan_amount),
+            ("KFTypePositionX", -amount, amount),
         ]
     elif preset is MotionPreset.PAN_RIGHT_LEFT:
         motion = [
             ("KFTypeScaleX", overscan, overscan),
-            ("KFTypePositionX", settings.pan_amount, -settings.pan_amount),
+            ("KFTypePositionX", amount, -amount),
         ]
     elif preset is MotionPreset.PAN_TOP_BOTTOM:
         motion = [
             ("KFTypeScaleX", overscan, overscan),
-            ("KFTypePositionY", settings.pan_amount, -settings.pan_amount),
+            ("KFTypePositionY", amount, -amount),
         ]
     elif preset is MotionPreset.PAN_BOTTOM_TOP:
         motion = [
             ("KFTypeScaleX", overscan, overscan),
-            ("KFTypePositionY", -settings.pan_amount, settings.pan_amount),
+            ("KFTypePositionY", -amount, amount),
         ]
     else:  # pragma: no cover - exhaustive guard for future enum additions
         raise ValueError(f"unsupported motion preset: {preset}")

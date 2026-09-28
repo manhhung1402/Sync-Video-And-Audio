@@ -14,6 +14,14 @@ from typing import Callable
 ProgressCallback = Callable[[float, str], None]
 
 
+# CTranslate2 ships Intel's libiomp5md.dll while native dependencies (torch,
+# pyarrow) load Microsoft's libomp140.x86_64.dll from System32.  Loading both
+# runtimes makes the second call abort(), which kills the GUI with no traceback
+# during transcription.  This must run before those imports, hence module scope
+# rather than configure_runtime_storage().
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+
 def app_data_root() -> Path:
     """Return writable app storage on the same drive as the packaged app.
 
