@@ -91,6 +91,8 @@ For development:
 
 The customer installer bundles Python runtime, FFmpeg/FFprobe, the `small` Whisper model and Noto Sans CJK. Customers do not need to install these separately.
 
+
+******ĐÂY LÀ MÃ NGUỒN TÔI TỰ THAY ĐỔI ĐÔI CHÚT, HÃY THAM KHẢO DỰ ÁN GỐC CỦA BẠN DUY HƯNG. XIN CẢM ƠN!******
 ## Installation for customers
 
 Download the latest Windows installer from the [Releases](https://github.com/yudgunH/SyncVideo-Audio/releases) page:
